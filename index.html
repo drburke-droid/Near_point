@@ -4,66 +4,101 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Near Point Add Testing</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
     <!-- ========== CALIBRATION SCREEN ========== -->
     <div id="calibration-screen" class="screen">
+        <div class="screen-gradient"></div>
         <div class="container">
-            <h1>Screen Calibration</h1>
-            <p class="subtitle">Accurate font sizing requires knowing this tablet's exact pixel density.</p>
+            <div class="calibration-hero">
+                <img src="logo.png" alt="Logo" class="logo logo-light">
+                <h1>Screen Calibration</h1>
+                <p class="subtitle">Accurate font sizing requires knowing this tablet's exact pixel density.</p>
+            </div>
 
             <div class="calibration-methods">
-                <div class="method-section">
-                    <h2>Quick Setup: Select Your Device</h2>
+                <div class="card card-elevated animate-in">
+                    <div class="card-header">
+                        <div class="card-icon">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
+                        </div>
+                        <h2>Quick Setup</h2>
+                    </div>
+                    <p class="card-desc">Select your tablet model for instant calibration.</p>
                     <div class="device-presets">
-                        <button class="preset-btn" data-ppi="267" data-name="Surface Pro 7">Surface Pro 7 (12.3")</button>
-                        <button class="preset-btn" data-ppi="267" data-name="Surface Pro 8/9/10">Surface Pro 8 / 9 / 10 (13")</button>
-                        <button class="preset-btn" data-ppi="267" data-name="Surface Pro 11">Surface Pro 11 (13")</button>
-                        <button class="preset-btn" data-ppi="220" data-name="Surface Go 3/4">Surface Go 3 / 4 (10.5")</button>
-                        <button class="preset-btn" data-ppi="0" data-name="Other">Other Device</button>
+                        <button class="preset-btn" data-ppi="267" data-name="Surface Pro 7">
+                            <span class="preset-name">Surface Pro 7</span>
+                            <span class="preset-detail">12.3" &middot; 267 PPI</span>
+                        </button>
+                        <button class="preset-btn" data-ppi="267" data-name="Surface Pro 8/9/10">
+                            <span class="preset-name">Surface Pro 8 / 9 / 10</span>
+                            <span class="preset-detail">13" &middot; 267 PPI</span>
+                        </button>
+                        <button class="preset-btn" data-ppi="267" data-name="Surface Pro 11">
+                            <span class="preset-name">Surface Pro 11</span>
+                            <span class="preset-detail">13" &middot; 267 PPI</span>
+                        </button>
+                        <button class="preset-btn" data-ppi="220" data-name="Surface Go 3/4">
+                            <span class="preset-name">Surface Go 3 / 4</span>
+                            <span class="preset-detail">10.5" &middot; 220 PPI</span>
+                        </button>
+                        <button class="preset-btn preset-btn-alt" data-ppi="0" data-name="Other">
+                            <span class="preset-name">Other Device</span>
+                            <span class="preset-detail">Use manual calibration</span>
+                        </button>
                     </div>
                 </div>
 
-                <div class="divider"><span>or</span></div>
+                <div class="divider"><span>or calibrate manually</span></div>
 
-                <div class="method-section">
-                    <h2>Manual Calibration</h2>
-                    <p>Place a standard credit card flat on the screen. Adjust the slider until the rectangle exactly matches your card.</p>
+                <div class="card card-elevated animate-in" style="animation-delay: 0.1s">
+                    <div class="card-header">
+                        <div class="card-icon">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+                        </div>
+                        <h2>Manual Calibration</h2>
+                    </div>
+                    <p class="card-desc">Place a standard credit card flat on the screen. Adjust until the outline matches exactly.</p>
                     <div class="calibration-area">
                         <div id="calibration-card">
                             <span class="card-label">CREDIT CARD</span>
-                            <span class="card-dimensions">85.6 mm x 54.0 mm</span>
+                            <span class="card-dimensions">85.6 mm &times; 54.0 mm</span>
                         </div>
                     </div>
                     <div class="slider-row">
-                        <label>Adjust size:</label>
+                        <label>Adjust:</label>
                         <input type="range" id="calibration-slider" min="60" max="180" value="100" step="0.5">
                         <span id="calibration-value">100%</span>
                     </div>
-                    <button id="save-manual-calibration" class="btn btn-primary">Save Manual Calibration</button>
+                    <button id="save-manual-calibration" class="btn btn-primary">Save Calibration</button>
                 </div>
             </div>
 
             <div id="calibration-status" class="status-bar hidden">
-                <span id="calibration-device-name"></span> &mdash;
-                <span id="calibration-ppmm"></span> CSS px/mm
-                <button id="recalibrate-inline" class="btn btn-small">Change</button>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                <span><strong id="calibration-device-name"></strong> &mdash; <span id="calibration-ppmm"></span> CSS px/mm</span>
+                <button id="recalibrate-inline" class="btn btn-small btn-ghost">Change</button>
             </div>
         </div>
     </div>
 
     <!-- ========== INPUT SCREEN (HERO) ========== -->
     <div id="input-screen" class="screen hidden">
-        <div class="container">
-            <header class="hero-header">
-                <img src="logo.png" alt="Logo" class="logo logo-dark">
+        <div class="hero-banner">
+            <div class="hero-banner-bg"></div>
+            <div class="container hero-banner-content">
+                <img src="logo.png" alt="Logo" class="logo logo-light hero-logo">
                 <h1>Near Point Add Testing</h1>
                 <p class="subtitle">Configure the patient's workstation parameters for calibrated near-point evaluation.</p>
-            </header>
-
-            <form id="patient-form" class="form-grid">
+            </div>
+        </div>
+        <div class="container form-container">
+            <form id="patient-form" class="form-grid card card-elevated animate-in">
                 <div class="form-group">
                     <label for="monitor-size">Monitor Size</label>
                     <select id="monitor-size">
@@ -89,7 +124,7 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="display-scaling">Windows Display Scaling</label>
+                    <label for="display-scaling">Display Scaling</label>
                     <select id="display-scaling">
                         <option value="100">100%</option>
                         <option value="125">125%</option>
@@ -122,12 +157,12 @@
                 </div>
 
                 <div class="form-actions full-width">
-                    <button type="submit" class="btn btn-primary btn-large">Begin Test</button>
-                    <button type="button" id="recalibrate-btn" class="btn btn-ghost">Recalibrate Screen</button>
+                    <button type="submit" class="btn btn-primary btn-large btn-glow">Begin Test</button>
+                    <button type="button" id="recalibrate-btn" class="btn btn-ghost">Recalibrate</button>
                 </div>
             </form>
 
-            <div class="info-panel">
+            <div class="card card-elevated info-panel animate-in" style="animation-delay: 0.1s">
                 <h3>Current Configuration</h3>
                 <div id="config-summary"></div>
             </div>
@@ -137,17 +172,29 @@
     <!-- ========== TEST DISPLAY SCREEN ========== -->
     <div id="test-screen" class="screen hidden">
         <nav class="test-nav">
-            <img src="logo.png" alt="Logo" class="logo logo-light">
-            <button class="tab active" data-tab="standard">Standard Test Type</button>
-            <button class="tab" data-tab="occupation">Occupation Samples</button>
-            <button class="tab" data-tab="documents">Documents</button>
-            <button id="back-btn" class="btn btn-ghost btn-small">Back to Setup</button>
+            <img src="logo.png" alt="Logo" class="logo logo-light nav-logo">
+            <div class="tab-group">
+                <button class="tab active" data-tab="standard">Standard Test Type</button>
+                <button class="tab" data-tab="occupation">Occupation</button>
+                <button class="tab" data-tab="documents">Documents</button>
+                <div class="tab-indicator"></div>
+            </div>
+            <button id="back-btn" class="btn btn-ghost btn-small btn-nav">Back</button>
         </nav>
 
         <div class="test-info-bar">
-            <span id="test-distance-info"></span>
-            <span id="test-monitor-info"></span>
-            <span id="test-vergence-info"></span>
+            <div class="info-chip">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                <span id="test-distance-info"></span>
+            </div>
+            <div class="info-chip">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
+                <span id="test-monitor-info"></span>
+            </div>
+            <div class="info-chip">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+                <span id="test-vergence-info"></span>
+            </div>
         </div>
 
         <div id="standard-tab" class="tab-content">

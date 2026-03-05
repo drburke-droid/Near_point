@@ -738,13 +738,19 @@ function getXHeightRatio(fontFamily) {
 // ==========================================
 
 function setupTestScreen() {
-    // Tab switching
-    $$('.test-nav .tab').forEach(tab => {
+    // Tab switching with animation
+    $$('.tab-group .tab').forEach(tab => {
         tab.addEventListener('click', () => {
-            $$('.test-nav .tab').forEach(t => t.classList.remove('active'));
+            $$('.tab-group .tab').forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
+
             $$('.tab-content').forEach(c => c.classList.add('hidden'));
-            $(`#${tab.dataset.tab}-tab`).classList.remove('hidden');
+            const target = $(`#${tab.dataset.tab}-tab`);
+            target.classList.remove('hidden');
+            // Re-trigger fade animation
+            target.style.animation = 'none';
+            target.offsetHeight; // force reflow
+            target.style.animation = '';
         });
     });
 
