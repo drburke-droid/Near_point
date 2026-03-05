@@ -8,6 +8,67 @@ const CREDIT_CARD_HEIGHT_MM = 53.98;
 const M_UNIT_MM = 1.454; // 1M = 1.454mm height (x-height for reading charts)
 const M_SIZES = [0.50, 0.75, 1.00, 1.25];
 const DEFAULT_CSS_PX_PER_MM = 96 / 25.4; // ~3.78, CSS spec: 1in = 96px
+const PT_TO_MM = 25.4 / 72; // 1pt = 0.3528mm
+
+// --- Document Types (fixed physical sizes) ---
+const DOCUMENTS = [
+    {
+        name: 'Paperback Book',
+        description: '11pt body text — typical mass-market or trade paperback',
+        font: '"Georgia", "Times New Roman", serif',
+        physicalEmMM: 11 * PT_TO_MM, // 3.88mm
+        sample: `The morning light filtered through the curtains as she reached for the worn leather journal on the nightstand. Its pages, yellowed with age, held the stories of three generations — tales of quiet courage, unexpected love, and the ordinary moments that somehow became extraordinary in the retelling. She turned to where she had left off the night before and began to read.`
+    },
+    {
+        name: 'Hardcover Novel',
+        description: '12pt body text — standard hardcover fiction',
+        font: '"Georgia", "Times New Roman", serif',
+        physicalEmMM: 12 * PT_TO_MM, // 4.23mm
+        sample: `He walked along the river path as the last colors of sunset reflected off the still water. Somewhere downstream, a church bell rang the hour, its tone carrying across the valley with a clarity that seemed to sharpen the evening air. He paused at the old stone bridge, resting his hands on the railing worn smooth by centuries of travelers who had stopped in this very spot.`
+    },
+    {
+        name: 'Newspaper',
+        description: '8.5pt body text — typical broadsheet or tabloid article',
+        font: '"Times New Roman", "Georgia", serif',
+        physicalEmMM: 8.5 * PT_TO_MM, // 3.0mm
+        sample: `City officials announced Thursday that the proposed downtown transit expansion will proceed to a public comment period beginning next month. The $2.4 billion project, which has been under review since 2023, would add 12 miles of light rail connecting the central business district to three suburban corridors. Transit authority chair Margaret Chen said the project could reduce commute times by up to 35 percent for an estimated 140,000 daily riders.`
+    },
+    {
+        name: 'Magazine',
+        description: '10pt body text — typical glossy magazine article',
+        font: '"Georgia", "Times New Roman", serif',
+        physicalEmMM: 10 * PT_TO_MM, // 3.53mm
+        sample: `The trend toward sustainable architecture has moved well beyond solar panels and recycled materials. Today's leading designers are incorporating living walls, passive ventilation systems, and bio-responsive facades that adapt to changing weather conditions. In Copenhagen, a recently completed office tower generates 20 percent more energy than it consumes, earning it recognition as the most efficient commercial building in Northern Europe.`
+    },
+    {
+        name: 'iPhone / Android (Default)',
+        description: '~17pt system font — default body text on most smartphones',
+        font: '"Segoe UI", "Helvetica Neue", "Arial", sans-serif',
+        physicalEmMM: 3.75, // measured: 17pt CSS at 460 PPI, 3x scaling
+        sample: `Hey, are you still coming to dinner tonight? We changed the reservation to 7:30. Let me know if that still works for you.\n\nAlso, Mom asked if you can bring that salad you made last time. Everyone loved it.`
+    },
+    {
+        name: 'Kindle / E-Reader (Default)',
+        description: '~11pt Bookerly — factory default reading size',
+        font: '"Georgia", "Palatino Linotype", serif',
+        physicalEmMM: 3.9, // Kindle Paperwhite default size 4
+        sample: `It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife. However little known the feelings or views of such a man may be on his first entering a neighbourhood, this truth is so well fixed in the minds of the surrounding families, that he is considered as the rightful property of some one or other of their daughters.`
+    },
+    {
+        name: 'Prescription / Medicine Label',
+        description: '6pt — typical drug facts and dosage instructions',
+        font: '"Arial", "Helvetica", sans-serif',
+        physicalEmMM: 6 * PT_TO_MM, // 2.12mm
+        sample: `Adults and children 12 years and over: Take 1 to 2 tablets every 4 to 6 hours while symptoms last. Do not take more than 6 tablets in 24 hours unless directed by a doctor. Children under 12 years: Ask a doctor. Store at 20-25\u00B0C (68-77\u00B0F). Protect from moisture. Keep out of reach of children.`
+    },
+    {
+        name: 'Fine Print / Legal Disclaimer',
+        description: '5pt — credit card agreements, insurance terms, package inserts',
+        font: '"Arial", "Helvetica", sans-serif',
+        physicalEmMM: 5 * PT_TO_MM, // 1.76mm
+        sample: `By using this service you agree to be bound by these Terms and Conditions, including all amendments and revisions. The company reserves the right to modify, suspend, or discontinue the service at any time without prior notice. Liability is limited to the amount paid for the service in the twelve months preceding the claim. This agreement shall be governed by the laws of the State of Delaware without regard to conflict of law provisions. Arbitration of disputes is mandatory and shall be conducted in accordance with the rules of the American Arbitration Association.`
+    }
+];
 
 // --- Standard Test Passages (different text at each size to prevent memorization) ---
 const TEST_PASSAGES = {
@@ -695,6 +756,7 @@ function renderTest() {
     updateTestInfoBar();
     renderStandardTestType();
     renderOccupationSamples();
+    renderDocumentSamples();
 }
 
 function updateTestInfoBar() {
@@ -837,6 +899,56 @@ function renderOccupationSamples() {
         meta.innerHTML =
             `<span><strong>App font:</strong> ${sizeLabel} ${app.font.split(',')[0].replace(/"/g, '')}</span>` +
             `<span><strong>Physical size:</strong> ${physicalEmMM.toFixed(2)}mm em</span>` +
+            `<span><strong>Approx:</strong> ${equivalentM.toFixed(2)}M</span>`;
+
+        sample.appendChild(titlebar);
+        sample.appendChild(content);
+        sample.appendChild(meta);
+        container.appendChild(sample);
+    });
+}
+
+function renderDocumentSamples() {
+    const container = $('#documents-test-container');
+    container.innerHTML = '';
+
+    const header = document.createElement('h2');
+    header.textContent = 'Common Document & Device Font Sizes';
+    header.style.marginBottom = '20px';
+    container.appendChild(header);
+
+    DOCUMENTS.forEach(doc => {
+        const cssFontSize = mmToCSS(doc.physicalEmMM);
+
+        const xRatio = getXHeightRatio(doc.font);
+        const xHeightMM = doc.physicalEmMM * xRatio;
+        const equivalentM = xHeightMM / M_UNIT_MM;
+
+        const sample = document.createElement('div');
+        sample.className = 'occupation-sample';
+
+        const titlebar = document.createElement('div');
+        titlebar.className = 'sample-titlebar';
+        titlebar.innerHTML = `
+            <div class="titlebar-dots"><span></span><span></span><span></span></div>
+            <strong>${doc.name}</strong>&ensp;&mdash;&ensp;${doc.description}
+        `;
+
+        const content = document.createElement('div');
+        content.className = 'sample-content';
+
+        const text = document.createElement('pre');
+        text.className = 'sample-text';
+        text.style.fontFamily = doc.font;
+        text.style.fontSize = cssFontSize + 'px';
+        text.style.lineHeight = '1.5';
+        text.textContent = doc.sample;
+        content.appendChild(text);
+
+        const meta = document.createElement('div');
+        meta.className = 'sample-meta';
+        meta.innerHTML =
+            `<span><strong>Physical em:</strong> ${doc.physicalEmMM.toFixed(2)}mm</span>` +
             `<span><strong>Approx:</strong> ${equivalentM.toFixed(2)}M</span>`;
 
         sample.appendChild(titlebar);
