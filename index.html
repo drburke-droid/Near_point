@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Near Point Add Testing</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- ========== CALIBRATION SCREEN ========== -->
+    <div id="calibration-screen" class="screen">
+        <div class="container">
+            <h1>Screen Calibration</h1>
+            <p class="subtitle">Accurate font sizing requires knowing this tablet's exact pixel density.</p>
+
+            <div class="calibration-methods">
+                <div class="method-section">
+                    <h2>Quick Setup: Select Your Device</h2>
+                    <div class="device-presets">
+                        <button class="preset-btn" data-ppi="267" data-name="Surface Pro 7">Surface Pro 7 (12.3")</button>
+                        <button class="preset-btn" data-ppi="267" data-name="Surface Pro 8/9/10">Surface Pro 8 / 9 / 10 (13")</button>
+                        <button class="preset-btn" data-ppi="267" data-name="Surface Pro 11">Surface Pro 11 (13")</button>
+                        <button class="preset-btn" data-ppi="220" data-name="Surface Go 3/4">Surface Go 3 / 4 (10.5")</button>
+                        <button class="preset-btn" data-ppi="0" data-name="Other">Other Device</button>
+                    </div>
+                </div>
+
+                <div class="divider"><span>or</span></div>
+
+                <div class="method-section">
+                    <h2>Manual Calibration</h2>
+                    <p>Place a standard credit card flat on the screen. Adjust the slider until the rectangle exactly matches your card.</p>
+                    <div class="calibration-area">
+                        <div id="calibration-card">
+                            <span class="card-label">CREDIT CARD</span>
+                            <span class="card-dimensions">85.6 mm x 54.0 mm</span>
+                        </div>
+                    </div>
+                    <div class="slider-row">
+                        <label>Adjust size:</label>
+                        <input type="range" id="calibration-slider" min="60" max="180" value="100" step="0.5">
+                        <span id="calibration-value">100%</span>
+                    </div>
+                    <button id="save-manual-calibration" class="btn btn-primary">Save Manual Calibration</button>
+                </div>
+            </div>
+
+            <div id="calibration-status" class="status-bar hidden">
+                <span id="calibration-device-name"></span> &mdash;
+                <span id="calibration-ppmm"></span> CSS px/mm
+                <button id="recalibrate-inline" class="btn btn-small">Change</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========== INPUT SCREEN (HERO) ========== -->
+    <div id="input-screen" class="screen hidden">
+        <div class="container">
+            <header class="hero-header">
+                <h1>Near Point Add Testing</h1>
+                <p class="subtitle">Configure the patient's workstation parameters for calibrated near-point evaluation.</p>
+            </header>
+
+            <form id="patient-form" class="form-grid">
+                <div class="form-group">
+                    <label for="monitor-size">Monitor Size</label>
+                    <select id="monitor-size">
+                        <option value="21">21"</option>
+                        <option value="22">22"</option>
+                        <option value="23">23"</option>
+                        <option value="24" selected>24"</option>
+                        <option value="25">25"</option>
+                        <option value="27">27"</option>
+                        <option value="32">32"</option>
+                        <option value="34">34" (Ultrawide)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="monitor-resolution">Monitor Resolution</label>
+                    <select id="monitor-resolution">
+                        <option value="1920x1080">1920 x 1080 (Full HD)</option>
+                        <option value="2560x1440">2560 x 1440 (QHD)</option>
+                        <option value="3840x2160">3840 x 2160 (4K UHD)</option>
+                        <option value="3440x1440">3440 x 1440 (Ultrawide QHD)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="display-scaling">Windows Display Scaling</label>
+                    <select id="display-scaling">
+                        <option value="100">100%</option>
+                        <option value="125">125%</option>
+                        <option value="150" selected>150%</option>
+                        <option value="175">175%</option>
+                        <option value="200">200%</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="working-distance">Working Distance</label>
+                    <div class="input-with-unit">
+                        <input type="number" id="working-distance" value="60" min="20" max="150" step="1">
+                        <span class="unit-toggle" id="distance-unit" data-unit="cm">cm</span>
+                    </div>
+                    <div class="helper-text">
+                        Vergence demand: <strong id="vergence-display">1.67 D</strong>
+                    </div>
+                </div>
+
+                <div class="form-group full-width">
+                    <label for="occupation">Occupation</label>
+                    <select id="occupation">
+                        <option value="investment-banker">Investment Banker</option>
+                        <option value="lawyer" selected>Lawyer</option>
+                        <option value="accountant">Accountant</option>
+                        <option value="engineer">Engineer</option>
+                        <option value="it">IT Professional</option>
+                    </select>
+                </div>
+
+                <div class="form-actions full-width">
+                    <button type="submit" class="btn btn-primary btn-large">Begin Test</button>
+                    <button type="button" id="recalibrate-btn" class="btn btn-ghost">Recalibrate Screen</button>
+                </div>
+            </form>
+
+            <div class="info-panel">
+                <h3>Current Configuration</h3>
+                <div id="config-summary"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========== TEST DISPLAY SCREEN ========== -->
+    <div id="test-screen" class="screen hidden">
+        <nav class="test-nav">
+            <button class="tab active" data-tab="standard">Standard Test Type</button>
+            <button class="tab" data-tab="occupation">Occupation Samples</button>
+            <button id="back-btn" class="btn btn-ghost btn-small">Back to Setup</button>
+        </nav>
+
+        <div class="test-info-bar">
+            <span id="test-distance-info"></span>
+            <span id="test-monitor-info"></span>
+            <span id="test-vergence-info"></span>
+        </div>
+
+        <div id="standard-tab" class="tab-content">
+            <div id="standard-test-container"></div>
+        </div>
+
+        <div id="occupation-tab" class="tab-content hidden">
+            <div id="occupation-test-container"></div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
