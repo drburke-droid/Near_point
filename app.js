@@ -55,27 +55,35 @@ GS US Equity     Last: 467.81  Chg: -2.45  %Chg: -0.52  Vol: 2.15M`
                 description: 'Microsoft Excel - DCF Model',
                 font: '"Calibri", "Segoe UI", sans-serif',
                 fontSize: 11,
-                sample:
-`Revenue ($M)            FY2023    FY2024E   FY2025E   FY2026E   CAGR
-Product Sales           1,234.5   1,389.2   1,562.1   1,756.4   12.5%
-Service Revenue           567.3     634.0     709.2     793.1   11.8%
-Total Revenue           1,801.8   2,023.2   2,271.3   2,549.5   12.3%
-COGS                     (990.1) (1,112.8) (1,249.2) (1,402.2)
-Gross Profit              811.7     910.4   1,022.1   1,147.3
-  Gross Margin            45.0%     45.0%     45.0%     45.0%`
+                tabular: {
+                    headers: ['Revenue ($M)', 'FY2023', 'FY2024E', 'FY2025E', 'FY2026E', 'CAGR'],
+                    alignments: ['left', 'right', 'right', 'right', 'right', 'right'],
+                    rows: [
+                        ['Product Sales', '1,234.5', '1,389.2', '1,562.1', '1,756.4', '12.5%'],
+                        ['Service Revenue', '567.3', '634.0', '709.2', '793.1', '11.8%'],
+                        ['Total Revenue', '1,801.8', '2,023.2', '2,271.3', '2,549.5', '12.3%'],
+                        ['COGS', '(990.1)', '(1,112.8)', '(1,249.2)', '(1,402.2)', ''],
+                        ['Gross Profit', '811.7', '910.4', '1,022.1', '1,147.3', ''],
+                        ['\u2003Gross Margin', '45.0%', '45.0%', '45.0%', '45.0%', '']
+                    ]
+                }
             },
             {
                 name: 'Excel - Dense Spreadsheet (8pt)',
                 description: 'Microsoft Excel - Sensitivity Table',
                 font: '"Calibri", "Segoe UI", sans-serif',
                 fontSize: 8,
-                sample:
-`EV/EBITDA Sensitivity         8.0x    8.5x    9.0x    9.5x   10.0x   10.5x
-WACC  8.0%                  $42.18  $45.67  $49.16  $52.65  $56.14  $59.63
-      9.0%                  $38.52  $41.78  $45.04  $48.30  $51.56  $54.82
-     10.0%                  $35.21  $38.26  $41.31  $44.36  $47.41  $50.46
-     11.0%                  $32.19  $35.05  $37.91  $40.77  $43.63  $46.49
-     12.0%                  $29.42  $32.11  $34.80  $37.49  $40.18  $42.87`
+                tabular: {
+                    headers: ['EV/EBITDA', '8.0x', '8.5x', '9.0x', '9.5x', '10.0x', '10.5x'],
+                    alignments: ['left', 'right', 'right', 'right', 'right', 'right', 'right'],
+                    rows: [
+                        ['WACC 8.0%', '$42.18', '$45.67', '$49.16', '$52.65', '$56.14', '$59.63'],
+                        ['WACC 9.0%', '$38.52', '$41.78', '$45.04', '$48.30', '$51.56', '$54.82'],
+                        ['WACC 10.0%', '$35.21', '$38.26', '$41.31', '$44.36', '$47.41', '$50.46'],
+                        ['WACC 11.0%', '$32.19', '$35.05', '$37.91', '$40.77', '$43.63', '$46.49'],
+                        ['WACC 12.0%', '$29.42', '$32.11', '$34.80', '$37.49', '$40.18', '$42.87']
+                    ]
+                }
             },
             {
                 name: 'Outlook Email (11pt)',
@@ -185,64 +193,77 @@ Sarah Mitchell, Esq.`
                 description: 'Microsoft Excel - General Ledger',
                 font: '"Calibri", "Segoe UI", sans-serif',
                 fontSize: 11,
-                sample:
-`Acct    Description              Debit        Credit       Balance
-1010    Cash - Operating       234,567.89                 234,567.89
-1200    Accounts Receivable    456,123.45                 456,123.45
-2010    Accounts Payable                    198,234.56  (198,234.56)
-3010    Retained Earnings                   892,456.78  (892,456.78)
-4010    Revenue - Services                  567,890.12  (567,890.12)
-5010    Cost of Services       312,456.78                 312,456.78
-6010    Salaries Expense       198,234.56                 198,234.56`
+                tabular: {
+                    headers: ['Acct', 'Description', 'Debit', 'Credit', 'Balance'],
+                    alignments: ['left', 'left', 'right', 'right', 'right'],
+                    rows: [
+                        ['1010', 'Cash - Operating', '234,567.89', '', '234,567.89'],
+                        ['1200', 'Accounts Receivable', '456,123.45', '', '456,123.45'],
+                        ['2010', 'Accounts Payable', '', '198,234.56', '(198,234.56)'],
+                        ['3010', 'Retained Earnings', '', '892,456.78', '(892,456.78)'],
+                        ['4010', 'Revenue - Services', '', '567,890.12', '(567,890.12)'],
+                        ['5010', 'Cost of Services', '312,456.78', '', '312,456.78'],
+                        ['6010', 'Salaries Expense', '198,234.56', '', '198,234.56']
+                    ]
+                }
             },
             {
                 name: 'Excel - Detail Cells (8pt)',
                 description: 'Microsoft Excel - Detailed Worksheet',
                 font: '"Calibri", "Segoe UI", sans-serif',
                 fontSize: 8,
-                sample:
-`Inv#     Date       Vendor              Amount     Tax      Total      Status    GL Acct
-10234   01/15/26   Office Depot         $1,234.56  $98.76   $1,333.32  Paid      6200
-10235   01/16/26   FedEx Shipping         $456.78  $36.54     $493.32  Pending   6300
-10236   01/17/26   Adobe Systems          $599.88  $47.99     $647.87  Paid      6150
-10237   01/18/26   AT&T Business          $234.99  $18.80     $253.79  Paid      6400
-10238   01/19/26   Staples Inc            $167.45  $13.40     $180.85  Pending   6200`
+                tabular: {
+                    headers: ['Inv#', 'Date', 'Vendor', 'Amount', 'Tax', 'Total', 'Status', 'GL Acct'],
+                    alignments: ['left', 'left', 'left', 'right', 'right', 'right', 'left', 'left'],
+                    rows: [
+                        ['10234', '01/15/26', 'Office Depot', '$1,234.56', '$98.76', '$1,333.32', 'Paid', '6200'],
+                        ['10235', '01/16/26', 'FedEx Shipping', '$456.78', '$36.54', '$493.32', 'Pending', '6300'],
+                        ['10236', '01/17/26', 'Adobe Systems', '$599.88', '$47.99', '$647.87', 'Paid', '6150'],
+                        ['10237', '01/18/26', 'AT&T Business', '$234.99', '$18.80', '$253.79', 'Paid', '6400'],
+                        ['10238', '01/19/26', 'Staples Inc', '$167.45', '$13.40', '$180.85', 'Pending', '6200']
+                    ]
+                }
             },
             {
                 name: 'Tax Software (9pt)',
                 description: 'Drake Tax / Lacerte - Tax Form',
                 font: '"Segoe UI", "Calibri", sans-serif',
                 fontSize: 9,
-                sample:
-`Schedule C - Profit or Loss From Business (Sole Proprietorship)
-Part I   Income
-Line 1   Gross receipts or sales ................  1,245,678.00
-Line 2   Returns and allowances .................     12,456.00
-Line 3   Subtract line 2 from line 1 ............  1,233,222.00
-Line 4   Cost of goods sold (from line 42) ......    567,890.00
-Line 5   Gross profit (subtract line 4 from 3) ..    665,332.00
-Line 6   Other income ...........................     34,567.00
-Line 7   Gross income (add lines 5 and 6) .......    699,899.00`
+                tabular: {
+                    headers: ['Schedule C - Profit or Loss From Business', '', 'Amount'],
+                    alignments: ['left', 'left', 'right'],
+                    rows: [
+                        ['Part I', 'Income', ''],
+                        ['Line 1', 'Gross receipts or sales', '1,245,678.00'],
+                        ['Line 2', 'Returns and allowances', '12,456.00'],
+                        ['Line 3', 'Subtract line 2 from line 1', '1,233,222.00'],
+                        ['Line 4', 'Cost of goods sold (from line 42)', '567,890.00'],
+                        ['Line 5', 'Gross profit (subtract line 4 from 3)', '665,332.00'],
+                        ['Line 6', 'Other income', '34,567.00'],
+                        ['Line 7', 'Gross income (add lines 5 and 6)', '699,899.00']
+                    ]
+                }
             },
             {
                 name: 'QuickBooks (10pt)',
                 description: 'QuickBooks - Profit & Loss',
                 font: '"Segoe UI", "Calibri", sans-serif',
                 fontSize: 10,
-                sample:
-`Profit & Loss Statement
-January through March 2026
-
-                                Jan         Feb         Mar        Total
-Income
-  Consulting Services       45,200.00   52,100.00   48,750.00  146,050.00
-  Software Licenses         12,500.00   12,500.00   12,500.00   37,500.00
-  Training Revenue           8,400.00    6,200.00    9,100.00   23,700.00
-Total Income                66,100.00   70,800.00   70,350.00  207,250.00
-
-Expenses
-  Payroll                   32,000.00   32,000.00   32,000.00   96,000.00
-  Rent                       4,500.00    4,500.00    4,500.00   13,500.00`
+                tabular: {
+                    headers: ['Profit & Loss  (Jan\u2013Mar 2026)', 'Jan', 'Feb', 'Mar', 'Total'],
+                    alignments: ['left', 'right', 'right', 'right', 'right'],
+                    rows: [
+                        ['Income', '', '', '', ''],
+                        ['\u2003Consulting Services', '45,200.00', '52,100.00', '48,750.00', '146,050.00'],
+                        ['\u2003Software Licenses', '12,500.00', '12,500.00', '12,500.00', '37,500.00'],
+                        ['\u2003Training Revenue', '8,400.00', '6,200.00', '9,100.00', '23,700.00'],
+                        ['Total Income', '66,100.00', '70,800.00', '70,350.00', '207,250.00'],
+                        ['', '', '', '', ''],
+                        ['Expenses', '', '', '', ''],
+                        ['\u2003Payroll', '32,000.00', '32,000.00', '32,000.00', '96,000.00'],
+                        ['\u2003Rent', '4,500.00', '4,500.00', '4,500.00', '13,500.00']
+                    ]
+                }
             }
         ]
     },
@@ -321,13 +342,17 @@ double computeRMS(const std::vector<SensorReading>& data) {
                 description: 'Microsoft Excel - Test Results',
                 font: '"Calibri", "Segoe UI", sans-serif',
                 fontSize: 11,
-                sample:
-`Test ID    Specimen    Load (kN)  Disp (mm)  Stress (MPa)  Strain    Result
-T-2026-01  AL6061-T6    45.23      1.234       312.8       0.00456   PASS
-T-2026-02  AL6061-T6    44.87      1.218       310.3       0.00452   PASS
-T-2026-03  SS316L       89.12      0.567       615.3       0.00312   PASS
-T-2026-04  SS316L       88.56      0.554       611.4       0.00308   PASS
-T-2026-05  Ti6Al4V     112.34      0.892       776.1       0.00698   FAIL`
+                tabular: {
+                    headers: ['Test ID', 'Specimen', 'Load (kN)', 'Disp (mm)', 'Stress (MPa)', 'Strain', 'Result'],
+                    alignments: ['left', 'left', 'right', 'right', 'right', 'right', 'left'],
+                    rows: [
+                        ['T-2026-01', 'AL6061-T6', '45.23', '1.234', '312.8', '0.00456', 'PASS'],
+                        ['T-2026-02', 'AL6061-T6', '44.87', '1.218', '310.3', '0.00452', 'PASS'],
+                        ['T-2026-03', 'SS316L', '89.12', '0.567', '615.3', '0.00312', 'PASS'],
+                        ['T-2026-04', 'SS316L', '88.56', '0.554', '611.4', '0.00308', 'PASS'],
+                        ['T-2026-05', 'Ti6Al4V', '112.34', '0.892', '776.1', '0.00698', 'FAIL']
+                    ]
+                }
             }
         ]
     },
@@ -822,14 +847,45 @@ function renderOccupationSamples() {
         const content = document.createElement('div');
         content.className = 'sample-content' + (app.dark ? ' dark' : '');
 
-        const text = document.createElement('pre');
-        text.className = 'sample-text';
-        text.style.fontFamily = app.font;
-        text.style.fontSize = cssFontSize + 'px';
-        text.style.lineHeight = '1.45';
-        text.textContent = app.sample;
+        if (app.tabular) {
+            const table = document.createElement('table');
+            table.className = 'sample-table';
+            table.style.fontFamily = app.font;
+            table.style.fontSize = cssFontSize + 'px';
 
-        content.appendChild(text);
+            const thead = document.createElement('thead');
+            const headerRow = document.createElement('tr');
+            app.tabular.headers.forEach((h, i) => {
+                const th = document.createElement('th');
+                th.textContent = h;
+                th.style.textAlign = app.tabular.alignments[i] || 'left';
+                headerRow.appendChild(th);
+            });
+            thead.appendChild(headerRow);
+            table.appendChild(thead);
+
+            const tbody = document.createElement('tbody');
+            app.tabular.rows.forEach(row => {
+                const tr = document.createElement('tr');
+                row.forEach((cell, i) => {
+                    const td = document.createElement('td');
+                    td.textContent = cell;
+                    td.style.textAlign = app.tabular.alignments[i] || 'left';
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            });
+            table.appendChild(tbody);
+            content.appendChild(table);
+        } else {
+            const text = document.createElement('pre');
+            text.className = 'sample-text';
+            text.style.fontFamily = app.font;
+            text.style.fontSize = cssFontSize + 'px';
+            text.style.lineHeight = '1.45';
+            text.textContent = app.sample;
+            content.appendChild(text);
+        }
 
         // Meta info
         const meta = document.createElement('div');
