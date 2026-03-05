@@ -843,8 +843,13 @@ h3 {
 
 .tab-content {
     padding: 32px 24px;
-    max-width: 100%;
+    max-width: 75%;
+    margin: 0 auto;
     animation: fadeIn 0.3s var(--ease-out);
+}
+
+#documents-tab {
+    max-width: 50%;
 }
 
 .tab-content.hidden {
