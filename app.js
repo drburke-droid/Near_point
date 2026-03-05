@@ -649,6 +649,11 @@ function setupInputScreen() {
     // Recalibrate button
     $('#recalibrate-btn').addEventListener('click', () => showScreen('calibration'));
 
+    // Set correct scaling default on page load based on initial resolution
+    if (SCALING_DEFAULTS[monitorRes.value]) {
+        scaling.value = SCALING_DEFAULTS[monitorRes.value];
+    }
+
     updateVergence();
     updateConfigSummary();
 }
