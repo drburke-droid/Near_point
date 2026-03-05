@@ -464,6 +464,7 @@ h3 {
 
 .tab-content {
     padding: 24px;
+    max-width: 100%;
 }
 
 .tab-content.hidden {
@@ -503,7 +504,7 @@ h3 {
 .test-text {
     line-height: 1.5;
     color: #1a1a1a;
-    max-width: 100%;
+    width: 100%;
     word-wrap: break-word;
 }
 
@@ -543,6 +544,7 @@ h3 {
     padding: 16px;
     background: white;
     overflow-x: auto;
+    width: 100%;
 }
 
 .sample-content.dark {
@@ -554,6 +556,7 @@ h3 {
     white-space: pre-wrap;
     word-wrap: break-word;
     color: #1a1a1a;
+    width: 100%;
 }
 
 .sample-content.dark .sample-text {
