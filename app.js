@@ -94,6 +94,65 @@ const SCALING_DEFAULTS = {
 // Font sizes in pt (desktop apps) or px (web apps, marked with fontUnit:'px')
 // Based on default application settings for each platform
 const OCCUPATIONS = {
+    'general': {
+        title: 'General Office Worker',
+        apps: [
+            {
+                name: 'Web Browser (16px default)',
+                description: 'Chrome / Edge - Website Body Text',
+                font: '"Segoe UI", "Arial", sans-serif',
+                fontSize: 16,
+                fontUnit: 'px',
+                sample: `Your order has been confirmed and is being prepared for shipment. You will receive a tracking number by email within 24 hours. If you have any questions about your order, please contact our support team or visit the Help Center for frequently asked questions.`
+            },
+            {
+                name: 'Microsoft Word (11pt Calibri)',
+                description: 'Microsoft Word - Document',
+                font: '"Calibri", "Segoe UI", sans-serif',
+                fontSize: 11,
+                sample: `Please review the attached document and provide your feedback by end of day Friday. The revised proposal includes updated figures from the quarterly report as well as the new timeline discussed during last week's meeting. Let me know if you have any questions or need additional information.`
+            },
+            {
+                name: 'Microsoft Excel (11pt Calibri)',
+                description: 'Microsoft Excel - Spreadsheet',
+                font: '"Calibri", "Segoe UI", sans-serif',
+                fontSize: 11,
+                tabular: {
+                    headers: ['Item', 'Description', 'Qty', 'Unit Price', 'Total'],
+                    alignments: ['left', 'left', 'right', 'right', 'right'],
+                    rows: [
+                        ['A-1001', 'Office Supplies', '24', '$12.50', '$300.00'],
+                        ['A-1002', 'Printer Paper (case)', '6', '$45.99', '$275.94'],
+                        ['A-1003', 'Toner Cartridge', '3', '$89.00', '$267.00'],
+                        ['A-1004', 'USB Flash Drive 64GB', '10', '$8.75', '$87.50'],
+                        ['A-1005', 'Desk Organizer', '4', '$22.00', '$88.00'],
+                        ['', '', '', 'Subtotal:', '$1,018.44']
+                    ]
+                }
+            },
+            {
+                name: 'Outlook Email (11pt Calibri)',
+                description: 'Microsoft Outlook - Email',
+                font: '"Calibri", "Segoe UI", sans-serif',
+                fontSize: 11,
+                sample: `Hi Team,\n\nJust a reminder that the staff meeting has been moved to 2:00 PM in Conference Room B. Please bring your project updates and any items you'd like to add to the agenda.\n\nThanks,\nJennifer`
+            },
+            {
+                name: 'PDF Document (12pt Times)',
+                description: 'Adobe Acrobat - PDF Report',
+                font: '"Times New Roman", "Georgia", serif',
+                fontSize: 12,
+                sample: `The annual performance review indicates steady growth across all departments, with overall revenue increasing by 8.3% compared to the previous fiscal year. Customer satisfaction scores remained above the 90th percentile for the third consecutive quarter, reflecting the team's continued commitment to service excellence.`
+            },
+            {
+                name: 'Small UI Text (9pt)',
+                description: 'Toolbar / Menu / Status Bar Text',
+                font: '"Segoe UI", "Arial", sans-serif',
+                fontSize: 9,
+                sample: `File  Edit  View  Insert  Format  Tools  Help  |  Page 1 of 12  |  Words: 3,847  |  English (United States)  |  100%  |  Last saved: 2:34 PM`
+            }
+        ]
+    },
     'investment-banker': {
         title: 'Investment Banker',
         apps: [
@@ -459,7 +518,7 @@ let state = {
     displayScaling: 150,
     workingDistance: 60, // cm
     distanceUnit: 'cm',
-    occupation: 'lawyer'
+    occupation: 'general'
 };
 
 // --- Font Metrics Cache ---
