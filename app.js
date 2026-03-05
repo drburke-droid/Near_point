@@ -90,19 +90,7 @@ GS US Equity     Last: 467.81  Chg: -2.45  %Chg: -0.52  Vol: 2.15M`
                 description: 'Microsoft Outlook - Email',
                 font: '"Calibri", "Segoe UI", sans-serif',
                 fontSize: 11,
-                sample:
-`Subject: Q4 Earnings Update - CONFIDENTIAL
-
-Hi Team,
-
-Please find attached the revised financial projections for the proposed
-acquisition target. Key metrics have been updated to reflect the latest
-market conditions and management guidance from yesterday's call.
-
-The implied EV/EBITDA multiple at the proposed offer price is 9.2x,
-which represents a 15% premium to the current trading level.
-
-Please review and send comments by EOD Thursday.`
+                sample: `Subject: Q4 Earnings Update - CONFIDENTIAL\n\nHi Team,\n\nPlease find attached the revised financial projections for the proposed acquisition target. Key metrics have been updated to reflect the latest market conditions and management guidance from yesterday's call.\n\nThe implied EV/EBITDA multiple at the proposed offer price is 9.2x, which represents a 15% premium to the current trading level.\n\nPlease review and send comments by EOD Thursday.`
             }
         ]
     },
@@ -114,33 +102,14 @@ Please review and send comments by EOD Thursday.`
                 description: 'Microsoft Word - Contract',
                 font: '"Times New Roman", "Georgia", serif',
                 fontSize: 12,
-                sample:
-`WHEREAS, the Party of the First Part (hereinafter referred to as
-"Licensor") hereby grants to the Party of the Second Part (hereinafter
-referred to as "Licensee") a non-exclusive, non-transferable license to
-use the intellectual property described in Exhibit A, subject to the
-terms and conditions set forth in this Agreement.
-
-Section 2.1  Term. The initial term of this Agreement shall commence on
-the Effective Date and shall continue for a period of thirty-six (36)
-months thereafter, unless earlier terminated in accordance with
-Section 8 of this Agreement.`
+                sample: `WHEREAS, the Party of the First Part (hereinafter referred to as "Licensor") hereby grants to the Party of the Second Part (hereinafter referred to as "Licensee") a non-exclusive, non-transferable license to use the intellectual property described in Exhibit A, subject to the terms and conditions set forth in this Agreement.\n\nSection 2.1  Term. The initial term of this Agreement shall commence on the Effective Date and shall continue for a period of thirty-six (36) months thereafter, unless earlier terminated in accordance with Section 8 of this Agreement.`
             },
             {
                 name: 'Word - Footnotes (10pt TNR)',
                 description: 'Microsoft Word - Legal Footnotes',
                 font: '"Times New Roman", "Georgia", serif',
                 fontSize: 10,
-                sample:
-`1. See Johnson v. State, 482 U.S. 451, 461 (1987) (holding that the
-standard of review for summary judgment requires the moving party to
-demonstrate the absence of a genuine issue of material fact).
-2. Cf. Roberts v. Anderson, 127 F.3d 1082, 1085 (D.C. Cir. 1997)
-(distinguishing the instant case on grounds that the statutory language
-at issue was unambiguous on its face).
-3. But see Williams v. Taylor, 529 U.S. 362, 390 (2000) (cautioning
-that a de novo standard does not permit the reviewing court to
-substitute its own judgment for that of the trial court).`
+                sample: `1. See Johnson v. State, 482 U.S. 451, 461 (1987) (holding that the standard of review for summary judgment requires the moving party to demonstrate the absence of a genuine issue of material fact).\n2. Cf. Roberts v. Anderson, 127 F.3d 1082, 1085 (D.C. Cir. 1997) (distinguishing the instant case on grounds that the statutory language at issue was unambiguous on its face).\n3. But see Williams v. Taylor, 529 U.S. 362, 390 (2000) (cautioning that a de novo standard does not permit the reviewing court to substitute its own judgment for that of the trial court).`
             },
             {
                 name: 'Westlaw - Case Research',
@@ -148,40 +117,14 @@ substitute its own judgment for that of the trial court).`
                 font: '"Georgia", "Times New Roman", serif',
                 fontSize: 14,
                 fontUnit: 'px',
-                sample:
-`SUPREME COURT OF THE UNITED STATES
-No. 21-1271
-
-JOHNSON v. DEPARTMENT OF COMMERCE
-
-Opinion of the Court
-
-   The question presented is whether the Administrative Procedure
-Act requires an agency to provide notice-and-comment rulemaking
-before issuing guidance documents that carry the force and effect
-of law. We hold that it does.
-
-   Respondent Department of Commerce issued Directive 2019-04
-without prior notice or opportunity for public comment.`
+                sample: `SUPREME COURT OF THE UNITED STATES\nNo. 21-1271\n\nJOHNSON v. DEPARTMENT OF COMMERCE\n\nOpinion of the Court\n\n   The question presented is whether the Administrative Procedure Act requires an agency to provide notice-and-comment rulemaking before issuing guidance documents that carry the force and effect of law. We hold that it does.\n\n   Respondent Department of Commerce issued Directive 2019-04 without prior notice or opportunity for public comment.`
             },
             {
                 name: 'Outlook Email (11pt)',
                 description: 'Microsoft Outlook - Legal Correspondence',
                 font: '"Calibri", "Segoe UI", sans-serif',
                 fontSize: 11,
-                sample:
-`Dear Counsel,
-
-Please be advised that the deposition of the plaintiff has been
-rescheduled to March 15, 2026 at 10:00 AM in our offices at
-200 Park Avenue, 25th Floor. Kindly confirm your availability
-at your earliest convenience.
-
-We also request that you produce the documents identified in our
-Second Request for Production no later than March 10, 2026.
-
-Regards,
-Sarah Mitchell, Esq.`
+                sample: `Dear Counsel,\n\nPlease be advised that the deposition of the plaintiff has been rescheduled to March 15, 2026 at 10:00 AM in our offices at 200 Park Avenue, 25th Floor. Kindly confirm your availability at your earliest convenience.\n\nWe also request that you produce the documents identified in our Second Request for Production no later than March 10, 2026.\n\nRegards,\nSarah Mitchell, Esq.`
             }
         ]
     },
