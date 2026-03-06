@@ -1129,7 +1129,7 @@ const distanceTracker = {
     calibrationK: null,    // calibration constant (cm * px)
 
     // Settings
-    markerSeparationMM: 120,
+    markerSeparationMM: 75,
 
     async start() {
         this.video = document.getElementById('camera-video');
