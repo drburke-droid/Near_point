@@ -218,6 +218,32 @@
                 <label for="standard-distance-slider">Testing Distance</label>
                 <input type="range" id="standard-distance-slider" min="40" max="60" value="40" step="1">
                 <span id="standard-distance-value">40 cm</span>
+                <button id="camera-track-btn" class="btn-camera" title="Track distance with camera">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                </button>
+            </div>
+            <div id="camera-panel" class="camera-panel hidden">
+                <div class="camera-preview-wrap">
+                    <video id="camera-video" autoplay playsinline muted></video>
+                    <canvas id="camera-canvas"></canvas>
+                </div>
+                <div class="camera-controls">
+                    <div class="camera-readout" id="camera-status">Camera off</div>
+                    <div class="camera-settings-row">
+                        <label>Marker spacing
+                            <input type="number" id="marker-separation" value="120" min="50" max="300" step="1">
+                            mm
+                        </label>
+                    </div>
+                    <div class="camera-settings-row">
+                        <label>Calibrate at
+                            <input type="number" id="calibrate-distance" value="50" min="20" max="100" step="1">
+                            cm
+                        </label>
+                        <button id="camera-calibrate-btn" class="btn btn-small btn-primary">Calibrate</button>
+                    </div>
+                    <div class="camera-hint">Place two bright green stickers on the phoropter at the spacing above</div>
+                </div>
             </div>
             <div id="standard-test-container"></div>
         </div>

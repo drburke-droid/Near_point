@@ -831,6 +831,36 @@ function setupTestScreen() {
         renderOccupationSamples();
     });
 
+    // Camera tracking toggle
+    $('#camera-track-btn').addEventListener('click', () => {
+        const panel = $('#camera-panel');
+        const btn = $('#camera-track-btn');
+        if (panel.classList.contains('hidden')) {
+            panel.classList.remove('hidden');
+            btn.classList.add('active');
+            distanceTracker.start();
+        } else {
+            panel.classList.add('hidden');
+            btn.classList.remove('active');
+            distanceTracker.stop();
+            $('#camera-status').textContent = 'Camera off';
+        }
+    });
+
+    $('#marker-separation').addEventListener('change', () => {
+        distanceTracker.markerSeparationMM = parseInt($('#marker-separation').value) || 120;
+        distanceTracker.saveSettings();
+    });
+
+    $('#camera-calibrate-btn').addEventListener('click', () => {
+        const knownDist = parseInt($('#calibrate-distance').value) || 50;
+        if (distanceTracker.calibrate(knownDist)) {
+            $('#camera-status').textContent = 'Calibrated! Tracking...';
+        } else {
+            $('#camera-status').textContent = 'Hold markers visible to calibrate';
+        }
+    });
+
     // Back button
     $('#back-btn').addEventListener('click', () => showScreen('input'));
 }
@@ -1075,3 +1105,269 @@ document.addEventListener('click', (e) => {
         showScreen('calibration');
     }
 });
+
+// ==========================================
+// CAMERA DISTANCE TRACKING
+// ==========================================
+// Uses two bright green stickers on the phoropter.
+// Detects them via color thresholding and calculates
+// distance using the pinhole camera model:
+//   distance = (known_separation × focal_length_px) / pixel_separation
+
+const distanceTracker = {
+    stream: null,
+    video: null,
+    procCanvas: null,
+    procCtx: null,
+    overlayCanvas: null,
+    overlayCtx: null,
+    active: false,
+    timeoutId: null,
+
+    // Settings (persisted)
+    markerSeparationMM: 120, // physical distance between stickers
+    focalLengthPx: null,     // calibrated focal length at processing resolution
+
+    // Processing
+    processingWidth: 640,
+    lastPixelSeparation: null,
+
+    // Green color thresholds (HSV)
+    hueMin: 60,
+    hueMax: 160,
+    satMin: 30,
+    valMin: 30,
+
+    // Smoothing
+    distanceHistory: [],
+    smoothingWindow: 5,
+
+    async start() {
+        this.video = document.getElementById('camera-video');
+        this.overlayCanvas = document.getElementById('camera-canvas');
+        this.overlayCtx = this.overlayCanvas.getContext('2d');
+        this.procCanvas = document.createElement('canvas');
+        this.procCtx = this.procCanvas.getContext('2d', { willReadFrequently: true });
+
+        try {
+            this.stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }
+            });
+            this.video.srcObject = this.stream;
+            await this.video.play();
+
+            // Size the processing canvas
+            const aspect = this.video.videoHeight / this.video.videoWidth;
+            this.procCanvas.width = this.processingWidth;
+            this.procCanvas.height = Math.round(this.processingWidth * aspect);
+
+            // Size the overlay to match the video
+            this.overlayCanvas.width = this.video.videoWidth;
+            this.overlayCanvas.height = this.video.videoHeight;
+
+            // Load saved calibration or estimate focal length from ~78 deg FOV
+            this.loadSettings();
+            if (!this.focalLengthPx) {
+                this.focalLengthPx = this.procCanvas.width / (2 * Math.tan(78 / 2 * Math.PI / 180));
+            }
+
+            // Sync UI with saved marker separation
+            const sepInput = document.getElementById('marker-separation');
+            if (sepInput) sepInput.value = this.markerSeparationMM;
+
+            this.active = true;
+            this.distanceHistory = [];
+            this.processLoop();
+
+            document.getElementById('camera-status').textContent = 'Looking for markers\u2026';
+        } catch (err) {
+            document.getElementById('camera-status').textContent = 'Camera access denied';
+        }
+    },
+
+    stop() {
+        this.active = false;
+        if (this.timeoutId) { clearTimeout(this.timeoutId); this.timeoutId = null; }
+        if (this.stream) {
+            this.stream.getTracks().forEach(t => t.stop());
+            this.stream = null;
+        }
+        if (this.overlayCtx) {
+            this.overlayCtx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
+        }
+        this.distanceHistory = [];
+        this.lastPixelSeparation = null;
+    },
+
+    processLoop() {
+        if (!this.active) return;
+        this.processFrame();
+        this.timeoutId = setTimeout(() => this.processLoop(), 66); // ~15 fps
+    },
+
+    processFrame() {
+        if (!this.video || this.video.readyState < 2) return;
+
+        const pw = this.procCanvas.width;
+        const ph = this.procCanvas.height;
+
+        // Draw video frame to processing canvas (downscaled)
+        this.procCtx.drawImage(this.video, 0, 0, pw, ph);
+        const imageData = this.procCtx.getImageData(0, 0, pw, ph);
+        const data = imageData.data;
+
+        // Find green pixels
+        const greenPixels = [];
+        for (let i = 0; i < data.length; i += 4) {
+            const r = data[i], g = data[i + 1], b = data[i + 2];
+            if (this.isTargetColor(r, g, b)) {
+                const idx = i / 4;
+                greenPixels.push({ x: idx % pw, y: (idx / pw) | 0 });
+            }
+        }
+
+        // Draw overlay
+        const ctx = this.overlayCtx;
+        const ow = this.overlayCanvas.width;
+        const oh = this.overlayCanvas.height;
+        ctx.clearRect(0, 0, ow, oh);
+
+        if (greenPixels.length < 10) {
+            document.getElementById('camera-status').textContent = 'No markers detected';
+            return;
+        }
+
+        // Cluster into two markers
+        const markers = this.clusterMarkers(greenPixels);
+        if (!markers) {
+            document.getElementById('camera-status').textContent = 'Need 2 markers visible';
+            return;
+        }
+
+        // Scale positions from processing canvas to overlay canvas
+        const sx = ow / pw;
+        const sy = oh / ph;
+
+        // Draw detected markers
+        ctx.fillStyle = 'rgba(0, 255, 100, 0.4)';
+        [markers.a, markers.b].forEach(m => {
+            ctx.beginPath();
+            ctx.arc(m.x * sx, m.y * sy, 14, 0, Math.PI * 2);
+            ctx.fill();
+        });
+
+        // Line between markers
+        ctx.strokeStyle = 'rgba(0, 255, 100, 0.7)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(markers.a.x * sx, markers.a.y * sy);
+        ctx.lineTo(markers.b.x * sx, markers.b.y * sy);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Pixel distance between marker centroids
+        const pixelDist = Math.hypot(markers.a.x - markers.b.x, markers.a.y - markers.b.y);
+        this.lastPixelSeparation = pixelDist;
+
+        // Pinhole model: distance = (real_size * focal_length) / pixel_size
+        const distanceMM = (this.markerSeparationMM * this.focalLengthPx) / pixelDist;
+        const distanceCm = distanceMM / 10;
+
+        // Smooth the reading
+        this.distanceHistory.push(distanceCm);
+        if (this.distanceHistory.length > this.smoothingWindow) this.distanceHistory.shift();
+        const smoothed = this.distanceHistory.reduce((a, b) => a + b, 0) / this.distanceHistory.length;
+        const roundedCm = Math.round(smoothed);
+
+        // Update readout
+        document.getElementById('camera-status').textContent = `Distance: ${roundedCm} cm`;
+
+        // Drive the slider if value is within range
+        const slider = document.getElementById('standard-distance-slider');
+        const lo = parseInt(slider.min);
+        const hi = parseInt(slider.max);
+        const clamped = Math.max(lo, Math.min(hi, roundedCm));
+        if (parseInt(slider.value) !== clamped) {
+            slider.value = clamped;
+            document.getElementById('standard-distance-value').textContent = clamped + ' cm';
+            renderStandardTestType(clamped);
+        }
+    },
+
+    // Split green pixels into two spatial clusters
+    clusterMarkers(pixels) {
+        pixels.sort((a, b) => a.x - b.x);
+
+        // Find the largest horizontal gap
+        let maxGap = 0, gapIdx = 0;
+        for (let i = 1; i < pixels.length; i++) {
+            const gap = pixels[i].x - pixels[i - 1].x;
+            if (gap > maxGap) { maxGap = gap; gapIdx = i; }
+        }
+
+        // Gap must be meaningful (>5% of frame width)
+        if (maxGap < this.procCanvas.width * 0.05) return null;
+
+        const groupA = pixels.slice(0, gapIdx);
+        const groupB = pixels.slice(gapIdx);
+        if (groupA.length < 5 || groupB.length < 5) return null;
+
+        const centroid = (arr) => ({
+            x: arr.reduce((s, p) => s + p.x, 0) / arr.length,
+            y: arr.reduce((s, p) => s + p.y, 0) / arr.length
+        });
+
+        return { a: centroid(groupA), b: centroid(groupB) };
+    },
+
+    // One-shot calibration: place markers at a known distance
+    calibrate(knownDistanceCm) {
+        if (!this.lastPixelSeparation || this.lastPixelSeparation < 1) return false;
+
+        // focal_length = pixel_separation * distance_mm / real_separation_mm
+        this.focalLengthPx = this.lastPixelSeparation * (knownDistanceCm * 10) / this.markerSeparationMM;
+        this.distanceHistory = [];
+        this.saveSettings();
+        return true;
+    },
+
+    // Fast inline HSV-ish check for bright green
+    isTargetColor(r, g, b) {
+        const max = Math.max(r, g, b);
+        const min = Math.min(r, g, b);
+        const d = max - min;
+
+        // Value check (brightness)
+        if (max < 77) return false; // ~30% of 255
+
+        // Saturation check
+        if (max === 0 || d / max < 0.30) return false;
+
+        // Hue check — only compute if we passed sat/val
+        let h;
+        if (d === 0) return false;
+        if (max === r) h = 60 * (((g - b) / d) % 6);
+        else if (max === g) h = 60 * ((b - r) / d + 2);
+        else h = 60 * ((r - g) / d + 4);
+        if (h < 0) h += 360;
+
+        return h >= this.hueMin && h <= this.hueMax;
+    },
+
+    saveSettings() {
+        localStorage.setItem('nearpoint_camera', JSON.stringify({
+            focalLengthPx: this.focalLengthPx,
+            markerSeparationMM: this.markerSeparationMM
+        }));
+    },
+
+    loadSettings() {
+        const saved = localStorage.getItem('nearpoint_camera');
+        if (saved) {
+            const data = JSON.parse(saved);
+            if (data.focalLengthPx) this.focalLengthPx = data.focalLengthPx;
+            if (data.markerSeparationMM) this.markerSeparationMM = data.markerSeparationMM;
+        }
+    }
+};
