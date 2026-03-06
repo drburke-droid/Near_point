@@ -962,8 +962,8 @@ function renderOccupationSamples() {
         const fontUnit = app.fontUnit || 'pt';
         // Calculate the physical em-size of this font on the patient's monitor
         const physicalEmMM = getPhysicalEmSize(app.fontSize, fontUnit, monitorPPI, state.displayScaling);
-        // Render at that physical size on the tablet
-        const cssFontSize = mmToCSS(physicalEmMM);
+        // Render at that physical size on the tablet, reduced 10% for occupation samples
+        const cssFontSize = mmToCSS(physicalEmMM) * 0.9;
 
         // Calculate what M-notation this corresponds to (for clinical reference)
         const xRatio = getXHeightRatio(app.font);
