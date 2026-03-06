@@ -1117,7 +1117,7 @@ const distanceTracker = {
     ctx: null,
 
     // State
-    mode: 'off', // off | live | cal_live | cal_frozen | meas_live | meas_frozen
+    mode: 'off', // off | live | cal_live | cal_frozen | meas_live | meas_frozen | meas_auto
     frozen: false,
     frozenImageData: null,
     clickPoints: [],       // [{x,y}] for current frame (max 2)
@@ -1128,8 +1128,140 @@ const distanceTracker = {
     calData: [],           // [{distanceCm, pixelSep}]
     calibrationK: null,    // calibration constant (cm * px)
 
+    // Color learning — samples collected during calibration clicks
+    colorSamples: [],      // [{h,s,v}] from all calibration click neighborhoods
+    colorProfile: null,    // {hMin,hMax,sMin,sMax,vMin,vMax} learned HSV thresholds
+
     // Settings
     markerSeparationMM: 75,
+
+    // Convert RGB (0-255) to HSV (h: 0-360, s: 0-100, v: 0-100)
+    rgbToHsv(r, g, b) {
+        r /= 255; g /= 255; b /= 255;
+        const max = Math.max(r, g, b), min = Math.min(r, g, b);
+        const d = max - min;
+        let h = 0;
+        if (d !== 0) {
+            if (max === r) h = ((g - b) / d + 6) % 6;
+            else if (max === g) h = (b - r) / d + 2;
+            else h = (r - g) / d + 4;
+            h *= 60;
+        }
+        const s = max === 0 ? 0 : (d / max) * 100;
+        const v = max * 100;
+        return { h, s, v };
+    },
+
+    // Sample pixels around a click point to learn the sticker color
+    sampleColorAtPoint(imageData, cx, cy, radius) {
+        const w = imageData.width;
+        const h = imageData.height;
+        const data = imageData.data;
+        const samples = [];
+        for (let dy = -radius; dy <= radius; dy++) {
+            for (let dx = -radius; dx <= radius; dx++) {
+                if (dx * dx + dy * dy > radius * radius) continue;
+                const px = Math.round(cx + dx);
+                const py = Math.round(cy + dy);
+                if (px < 0 || px >= w || py < 0 || py >= h) continue;
+                const idx = (py * w + px) * 4;
+                const hsv = this.rgbToHsv(data[idx], data[idx + 1], data[idx + 2]);
+                samples.push(hsv);
+            }
+        }
+        return samples;
+    },
+
+    // Build a color profile from accumulated samples (mean ± 3*std with padding)
+    buildColorProfile() {
+        if (this.colorSamples.length < 10) return null;
+        const n = this.colorSamples.length;
+
+        const hVals = this.colorSamples.map(s => s.h);
+        const sVals = this.colorSamples.map(s => s.s);
+        const vVals = this.colorSamples.map(s => s.v);
+
+        const mean = arr => arr.reduce((a, b) => a + b, 0) / arr.length;
+        const std = arr => {
+            const m = mean(arr);
+            return Math.sqrt(arr.reduce((sum, x) => sum + (x - m) ** 2, 0) / arr.length);
+        };
+
+        const hMean = mean(hVals), hStd = std(hVals);
+        const sMean = mean(sVals), sStd = std(sVals);
+        const vMean = mean(vVals), vStd = std(vVals);
+
+        // Use 3*std + padding of 10 for hue, 15 for sat/val
+        return {
+            hMin: Math.max(0, hMean - 3 * hStd - 10),
+            hMax: Math.min(360, hMean + 3 * hStd + 10),
+            sMin: Math.max(0, sMean - 3 * sStd - 15),
+            sMax: Math.min(100, sMean + 3 * sStd + 15),
+            vMin: Math.max(0, vMean - 3 * vStd - 15),
+            vMax: Math.min(100, vMean + 3 * vStd + 15)
+        };
+    },
+
+    // Auto-detect markers in the frozen frame using learned color profile
+    autoDetectMarkers() {
+        if (!this.colorProfile || !this.frozenImageData) return null;
+
+        const imageData = this.frozenImageData;
+        const w = imageData.width, h = imageData.height;
+        const data = imageData.data;
+        const profile = this.colorProfile;
+        const matchingPixels = [];
+
+        // Scan every 2nd pixel for speed
+        for (let y = 0; y < h; y += 2) {
+            for (let x = 0; x < w; x += 2) {
+                const idx = (y * w + x) * 4;
+                const hsv = this.rgbToHsv(data[idx], data[idx + 1], data[idx + 2]);
+                if (hsv.h >= profile.hMin && hsv.h <= profile.hMax &&
+                    hsv.s >= profile.sMin && hsv.s <= profile.sMax &&
+                    hsv.v >= profile.vMin && hsv.v <= profile.vMax) {
+                    matchingPixels.push({ x, y });
+                }
+            }
+        }
+
+        if (matchingPixels.length < 6) return null;
+
+        return this.clusterMarkers(matchingPixels);
+    },
+
+    // Cluster matching pixels into two groups and return centroids
+    clusterMarkers(pixels) {
+        // Sort by x position
+        pixels.sort((a, b) => a.x - b.x);
+
+        // Find the largest gap in x to split into two clusters
+        let maxGap = 0, splitIdx = 0;
+        for (let i = 1; i < pixels.length; i++) {
+            const gap = pixels[i].x - pixels[i - 1].x;
+            if (gap > maxGap) {
+                maxGap = gap;
+                splitIdx = i;
+            }
+        }
+
+        // The gap must be significant (at least 20px) to be two separate markers
+        if (maxGap < 20) return null;
+
+        const group1 = pixels.slice(0, splitIdx);
+        const group2 = pixels.slice(splitIdx);
+
+        // Each group should have a reasonable number of pixels
+        if (group1.length < 3 || group2.length < 3) return null;
+
+        // Compute centroids
+        const centroid = arr => ({
+            x: arr.reduce((s, p) => s + p.x, 0) / arr.length,
+            y: arr.reduce((s, p) => s + p.y, 0) / arr.length
+        });
+
+        return [centroid(group1), centroid(group2)];
+    },
 
     async start() {
         this.video = document.getElementById('camera-video');
@@ -1220,15 +1352,64 @@ const distanceTracker = {
     startCalibration() {
         this.calStep = 0;
         this.calData = [];
+        this.colorSamples = [];   // Reset color learning
+        this.colorProfile = null;
         this.unfreezeFrame();
         this.mode = 'cal_live';
         this.updateUI();
     },
 
-    // Button: Measure
+    // Button: Measure — auto-detect markers using learned colors
     startMeasure() {
+        if (!this.calibrationK) {
+            document.getElementById('camera-status').textContent = 'Calibrate first!';
+            return;
+        }
+
+        // Return to live video first (in case we're re-measuring)
         this.unfreezeFrame();
-        this.mode = 'meas_live';
+
+        // Brief delay to let the video feed update before capturing
+        document.getElementById('camera-status').textContent = 'Capturing...';
+        setTimeout(() => this._doMeasure(), 300);
+    },
+
+    _doMeasure() {
+        // Capture a frame
+        this.captureFrame();
+
+        // Try auto-detection if we have a color profile
+        if (this.colorProfile) {
+            const markers = this.autoDetectMarkers();
+            if (markers) {
+                // Auto-detected successfully
+                this.clickPoints = markers;
+                this.drawMarkers();
+
+                const pixSep = Math.hypot(markers[0].x - markers[1].x, markers[0].y - markers[1].y);
+                const distCm = Math.round(this.calibrationK / pixSep);
+
+                document.getElementById('camera-status').textContent =
+                    `Auto-detected: ${distCm} cm  (${pixSep.toFixed(0)}px separation)`;
+
+                // Update the slider
+                const slider = document.getElementById('standard-distance-slider');
+                const clamped = Math.max(
+                    parseInt(slider.min),
+                    Math.min(parseInt(slider.max), distCm)
+                );
+                slider.value = clamped;
+                document.getElementById('standard-distance-value').textContent = clamped + ' cm';
+                renderStandardTestType(clamped);
+
+                this.mode = 'meas_auto';
+                this.updateUI();
+                return;
+            }
+        }
+
+        // Fallback: manual click mode
+        this.mode = 'meas_frozen';
         this.updateUI();
     },
 
@@ -1241,6 +1422,13 @@ const distanceTracker = {
         const y = (e.clientY - rect.top) * (this.canvas.height / rect.height);
 
         this.clickPoints.push({ x, y });
+
+        // During calibration, learn the sticker color from each click
+        if (this.mode === 'cal_frozen' && this.frozenImageData) {
+            const samples = this.sampleColorAtPoint(this.frozenImageData, Math.round(x), Math.round(y), 12);
+            this.colorSamples.push(...samples);
+        }
+
         this.drawMarkers();
 
         if (this.clickPoints.length === 2) {
@@ -1342,12 +1530,16 @@ const distanceTracker = {
         // k = average(distanceCm * pixelSeparation) for all points
         const kValues = this.calData.map(d => d.distanceCm * d.pixelSep);
         this.calibrationK = kValues.reduce((a, b) => a + b, 0) / kValues.length;
+
+        // Build color profile from accumulated samples
+        this.colorProfile = this.buildColorProfile();
         this.saveSettings();
 
         // Show summary
         const pairs = this.calData.map(d => `${d.distanceCm}cm=${d.pixelSep.toFixed(0)}px`).join(', ');
+        const autoMsg = this.colorProfile ? ' Auto-detect enabled.' : '';
         document.getElementById('camera-status').textContent =
-            `Calibrated! k=${this.calibrationK.toFixed(0)} (${pairs})`;
+            `Calibrated! k=${this.calibrationK.toFixed(0)} (${pairs})${autoMsg}`;
         this.mode = 'live';
 
         setTimeout(() => {
@@ -1370,7 +1562,8 @@ const distanceTracker = {
         switch (this.mode) {
             case 'live':
                 if (this.calibrationK) {
-                    status.textContent = `Calibrated (k=${this.calibrationK.toFixed(0)}). Measure or re-calibrate.`;
+                    const autoLabel = this.colorProfile ? ' (auto-detect)' : '';
+                    status.textContent = `Calibrated (k=${this.calibrationK.toFixed(0)}).${autoLabel} Measure or re-calibrate.`;
                     measBtn.style.display = '';
                     measBtn.textContent = 'Measure';
                 } else {
@@ -1407,7 +1600,7 @@ const distanceTracker = {
 
             case 'meas_frozen':
                 if (this.clickPoints.length === 0) {
-                    status.textContent = 'Click the FIRST orange sticker';
+                    status.textContent = 'Auto-detect failed. Click the FIRST orange sticker';
                 } else if (this.clickPoints.length === 1) {
                     status.textContent = 'Click the SECOND orange sticker';
                 }
@@ -1419,13 +1612,22 @@ const distanceTracker = {
                     calBtn.textContent = 'Re-calibrate';
                 }
                 break;
+
+            case 'meas_auto':
+                // Auto-detection succeeded — show remeasure and recalibrate options
+                measBtn.style.display = '';
+                measBtn.textContent = 'Remeasure';
+                calBtn.style.display = '';
+                calBtn.textContent = 'Re-calibrate';
+                break;
         }
     },
 
     saveSettings() {
         localStorage.setItem('nearpoint_camera', JSON.stringify({
             calibrationK: this.calibrationK,
-            markerSeparationMM: this.markerSeparationMM
+            markerSeparationMM: this.markerSeparationMM,
+            colorProfile: this.colorProfile
         }));
     },
 
@@ -1435,6 +1637,7 @@ const distanceTracker = {
             const data = JSON.parse(saved);
             if (data.calibrationK) this.calibrationK = data.calibrationK;
             if (data.markerSeparationMM) this.markerSeparationMM = data.markerSeparationMM;
+            if (data.colorProfile) this.colorProfile = data.colorProfile;
         }
     }
 };
