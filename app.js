@@ -1153,7 +1153,7 @@ const distanceTracker = {
 
             this.mode = 'live';
             this.frozen = false;
-            this.video.style.display = '';
+            this.video.style.visibility = '';
             this.canvas.style.cursor = 'default';
             this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
             this.updateUI();
@@ -1171,7 +1171,7 @@ const distanceTracker = {
         this.frozen = false;
         this.frozenImageData = null;
         this.clickPoints = [];
-        this.video.style.display = '';
+        this.video.style.visibility = '';
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
         document.getElementById('camera-status').textContent = 'Camera off';
     },
@@ -1188,7 +1188,7 @@ const distanceTracker = {
         this.ctx.restore();
         // Save the clean frame for redrawing after marker annotations
         this.frozenImageData = this.ctx.getImageData(0, 0, w, h);
-        this.video.style.display = 'none';
+        this.video.style.visibility = 'hidden';
         this.canvas.style.cursor = 'crosshair';
         this.frozen = true;
         this.clickPoints = [];
@@ -1197,7 +1197,7 @@ const distanceTracker = {
     // Return to live video
     unfreezeFrame() {
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-        this.video.style.display = '';
+        this.video.style.visibility = '';
         this.canvas.style.cursor = 'default';
         this.frozen = false;
         this.frozenImageData = null;
