@@ -841,6 +841,24 @@ h3 {
     flex-shrink: 0;
 }
 
+.info-chip-select select {
+    border: none;
+    background: transparent;
+    font-family: inherit;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    cursor: pointer;
+    outline: none;
+    padding: 0;
+    -webkit-appearance: none;
+    appearance: none;
+    padding-right: 14px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2394a3b8'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right center;
+}
+
 .tab-content {
     padding: 32px 24px;
     max-width: 75%;
@@ -848,11 +866,69 @@ h3 {
     animation: fadeIn 0.3s var(--ease-out);
 }
 
+#standard-tab,
 #occupation-tab,
 #documents-tab {
     max-width: 100%;
     background: url('windows-11-bloom-5120x2880-14423.jpg') center / cover no-repeat fixed;
     min-height: calc(100vh - 97px);
+}
+
+#standard-tab {
+    padding: 0;
+}
+
+.standard-distance-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding: 12px 24px;
+    background: rgba(15, 23, 42, 0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    position: sticky;
+    top: 56px;
+    z-index: 50;
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+.standard-distance-bar label {
+    white-space: nowrap;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.standard-distance-bar input[type="range"] {
+    width: 200px;
+    height: 6px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 3px;
+    outline: none;
+}
+
+.standard-distance-bar input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--gradient-glow);
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(58, 123, 213, 0.4);
+}
+
+#standard-test-container {
+    max-width: 50%;
+    margin: 0 auto;
+    padding: 32px 24px;
+    transition: max-width 0.3s var(--ease-out);
 }
 
 #occupation-test-container {
@@ -901,7 +977,7 @@ h3 {
 }
 
 .test-text {
-    line-height: 1.5;
+    line-height: 1.15;
     color: var(--slate-900);
     width: 100%;
     word-wrap: break-word;
@@ -975,7 +1051,7 @@ h3 {
 .sample-table {
     width: 100%;
     border-collapse: collapse;
-    line-height: 1.45;
+    line-height: 1.2;
     color: var(--slate-900);
 }
 

@@ -95,7 +95,7 @@ const SCALING_DEFAULTS = {
 // Based on default application settings for each platform
 const OCCUPATIONS = {
     'general': {
-        title: 'General Office Worker',
+        title: 'General Office Work',
         apps: [
             {
                 name: 'Web Browser (16px default)',
@@ -818,13 +818,30 @@ function setupTestScreen() {
         });
     });
 
+    // Distance slider for standard test
+    $('#standard-distance-slider').addEventListener('input', () => {
+        const d = parseInt($('#standard-distance-slider').value);
+        $('#standard-distance-value').textContent = d + ' cm';
+        renderStandardTestType(d);
+    });
+
+    // Occupation picker in test header
+    $('#test-occupation-picker').addEventListener('change', () => {
+        state.occupation = $('#test-occupation-picker').value;
+        renderOccupationSamples();
+    });
+
     // Back button
     $('#back-btn').addEventListener('click', () => showScreen('input'));
 }
 
 function renderTest() {
     updateTestInfoBar();
-    renderStandardTestType();
+    // Sync occupation picker with form selection
+    $('#test-occupation-picker').value = state.occupation;
+    const sliderDist = parseInt($('#standard-distance-slider').value) || 40;
+    $('#standard-distance-value').textContent = sliderDist + ' cm';
+    renderStandardTestType(sliderDist);
     renderOccupationSamples();
     renderDocumentSamples();
 }
@@ -842,41 +859,62 @@ function updateTestInfoBar() {
         `Vergence: ${vergence} D`;
 }
 
-function renderStandardTestType() {
+function renderStandardTestType(testDistanceCm) {
     const container = $('#standard-test-container');
     container.innerHTML = '';
 
-    const distM = state.workingDistance / 100; // meters
+    testDistanceCm = testDistanceCm || 40;
+    const distM = testDistanceCm / 100;
     const testFont = '"Times New Roman", "Georgia", serif';
     const xRatio = getXHeightRatio(testFont);
 
+    // Container width: 50% at 40cm, 75% at 60cm (linear interpolation)
+    const widthPercent = 50 + (testDistanceCm - 40) * 1.25;
+    container.style.maxWidth = widthPercent + '%';
+
     M_SIZES.forEach(m => {
-        const xHeightMM = m * M_UNIT_MM; // physical x-height needed
-        // CSS font-size = physical em-size * cssPixelsPerMm
-        // em-size = x-height / x-height-ratio
+        // Scale x-height with testing distance (reference: 40cm standard)
+        const xHeightMM = m * M_UNIT_MM * (testDistanceCm / 40);
         const emSizeMM = xHeightMM / xRatio;
         const cssFontSize = mmToCSS(emSizeMM);
 
-        // Snellen equivalent at this distance
-        const snellenDenom = Math.round(20 * m / distM);
+        // Snellen equivalent (constant with distance-scaled sizing)
+        const snellenDenom = Math.round(20 * m / 0.4);
 
-        const section = document.createElement('div');
-        section.className = 'test-type-section';
+        // Card wrapper (matches occupation/document card style)
+        const sample = document.createElement('div');
+        sample.className = 'occupation-sample';
 
-        const label = document.createElement('div');
-        label.className = 'test-label';
-        label.innerHTML = `${m.toFixed(2)}M <span class="snellen">(20/${snellenDenom} at ${state.workingDistance.toFixed(0)}cm)</span>`;
+        const titlebar = document.createElement('div');
+        titlebar.className = 'sample-titlebar';
+        titlebar.innerHTML = `
+            <div class="titlebar-dots"><span></span><span></span><span></span></div>
+            <strong>${m.toFixed(2)}M</strong>&ensp;&mdash;&ensp;20/${snellenDenom} at ${testDistanceCm}cm
+        `;
+
+        const content = document.createElement('div');
+        content.className = 'sample-content';
 
         const text = document.createElement('p');
         text.className = 'test-text';
         text.style.fontFamily = testFont;
         text.style.fontSize = cssFontSize + 'px';
-        text.style.lineHeight = '1.5';
+        text.style.lineHeight = '1.15';
         text.textContent = TEST_PASSAGES[m];
 
-        section.appendChild(label);
-        section.appendChild(text);
-        container.appendChild(section);
+        content.appendChild(text);
+
+        const meta = document.createElement('div');
+        meta.className = 'sample-meta';
+        meta.innerHTML =
+            `<span><strong>Physical x-height:</strong> ${xHeightMM.toFixed(2)}mm</span>` +
+            `<span><strong>M-notation:</strong> ${m.toFixed(2)}M</span>` +
+            `<span><strong>Snellen:</strong> 20/${snellenDenom}</span>`;
+
+        sample.appendChild(titlebar);
+        sample.appendChild(content);
+        sample.appendChild(meta);
+        container.appendChild(sample);
     });
 }
 
@@ -957,7 +995,7 @@ function renderOccupationSamples() {
             text.className = 'sample-text';
             text.style.fontFamily = app.font;
             text.style.fontSize = cssFontSize + 'px';
-            text.style.lineHeight = '1.45';
+            text.style.lineHeight = '1.15';
             text.textContent = app.sample;
             content.appendChild(text);
         }
@@ -1011,7 +1049,7 @@ function renderDocumentSamples() {
         text.className = 'sample-text';
         text.style.fontFamily = doc.font;
         text.style.fontSize = cssFontSize + 'px';
-        text.style.lineHeight = '1.5';
+        text.style.lineHeight = '1.15';
         text.textContent = doc.sample;
         content.appendChild(text);
 

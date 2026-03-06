@@ -8,6 +8,10 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#0a1628">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 </head>
 <body>
 
@@ -148,7 +152,7 @@
                 <div class="form-group full-width">
                     <label for="occupation">Occupation</label>
                     <select id="occupation">
-                        <option value="general" selected>General Office Worker</option>
+                        <option value="general" selected>General Office Work</option>
                         <option value="investment-banker">Investment Banker</option>
                         <option value="lawyer">Lawyer</option>
                         <option value="accountant">Accountant</option>
@@ -196,9 +200,25 @@
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
                 <span id="test-vergence-info"></span>
             </div>
+            <div class="info-chip info-chip-select">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>
+                <select id="test-occupation-picker">
+                    <option value="general">General Office Work</option>
+                    <option value="investment-banker">Investment Banker</option>
+                    <option value="lawyer">Lawyer</option>
+                    <option value="accountant">Accountant</option>
+                    <option value="engineer">Engineer</option>
+                    <option value="it">IT Professional</option>
+                </select>
+            </div>
         </div>
 
         <div id="standard-tab" class="tab-content">
+            <div class="standard-distance-bar">
+                <label for="standard-distance-slider">Testing Distance</label>
+                <input type="range" id="standard-distance-slider" min="40" max="60" value="40" step="1">
+                <span id="standard-distance-value">40 cm</span>
+            </div>
             <div id="standard-test-container"></div>
         </div>
 
@@ -212,5 +232,10 @@
     </div>
 
     <script src="app.js"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('sw.js').catch(() => {});
+        }
+    </script>
 </body>
 </html>
