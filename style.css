@@ -973,6 +973,11 @@ h3 {
     overflow: hidden;
     border: 1px solid rgba(255, 255, 255, 0.15);
     flex-shrink: 0;
+    transition: width 0.3s ease;
+}
+
+.camera-panel.calibrating .camera-preview-wrap {
+    width: min(560px, calc(100vw - 260px));
 }
 
 .camera-preview-wrap video {

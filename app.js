@@ -1402,10 +1402,8 @@ const distanceTracker = {
     frozenImageData: null,
     clickPoints: [],       // [{x,y}] for current frame (max 2)
 
-    // Calibration
-    calDistances: [40, 50, 60, 80], // cm ground-truth distances
-    calStep: 0,
-    calData: [],           // [{distanceCm, pixelSep}]
+    // Calibration (single-point: user provides distance + we measure pixel separation)
+    calDistanceCm: 40,     // user-entered distance during calibration
     calibrationK: null,    // calibration constant (cm * px)
 
     // Color learning — samples collected during calibration clicks
@@ -1684,14 +1682,15 @@ const distanceTracker = {
         this.updateUI();
     },
 
-    // Button: Calibrate
+    // Button: Calibrate — single-point: user enters distance, we compute k
     startCalibration() {
-        this.calStep = 0;
-        this.calData = [];
         this.colorSamples = [];   // Reset color learning
         this.colorProfile = null;
         this.unfreezeFrame();
         this.mode = 'cal_live';
+        // Expand viewfinder for calibration
+        document.getElementById('camera-panel').classList.add('calibrating');
+        document.getElementById('cal-distance-row').style.display = '';
         this.updateUI();
     },
 
@@ -1766,10 +1765,51 @@ const distanceTracker = {
         };
     },
 
+    // Search near a point for the center of an orange blob (snap-to-sticker)
+    findNearestOrangeBlob(cx, cy, searchRadius) {
+        if (!this.frozenImageData) return null;
+        const w = this.frozenImageData.width, h = this.frozenImageData.height;
+        const data = this.frozenImageData.data;
+
+        // Use learned color profile if available, otherwise broad orange hue
+        const hasProfile = !!this.colorProfile;
+        const prof = this.colorProfile || { hMin: 5, hMax: 35, sMin: 40, sMax: 100, vMin: 40, vMax: 100 };
+
+        const matches = [];
+        const r = Math.round(searchRadius);
+        for (let dy = -r; dy <= r; dy += 2) {
+            for (let dx = -r; dx <= r; dx += 2) {
+                if (dx * dx + dy * dy > r * r) continue;
+                const px = Math.round(cx + dx), py = Math.round(cy + dy);
+                if (px < 0 || px >= w || py < 0 || py >= h) continue;
+                const idx = (py * w + px) * 4;
+                const hsv = this.rgbToHsv(data[idx], data[idx + 1], data[idx + 2]);
+                if (hsv.h >= prof.hMin && hsv.h <= prof.hMax &&
+                    hsv.s >= prof.sMin && hsv.s <= prof.sMax &&
+                    hsv.v >= prof.vMin && hsv.v <= prof.vMax) {
+                    matches.push({ x: px, y: py });
+                }
+            }
+        }
+        if (matches.length < 4) return null;
+
+        // Return centroid of matches
+        return {
+            x: matches.reduce((s, p) => s + p.x, 0) / matches.length,
+            y: matches.reduce((s, p) => s + p.y, 0) / matches.length
+        };
+    },
+
     handlePointerDown(e) {
         if (!this.frozen || this.clickPoints.length >= 2) return;
         this.dragging = true;
-        this.dragPoint = this.canvasCoords(e);
+        let pt = this.canvasCoords(e);
+
+        // Snap to nearest orange blob within 60px
+        const snap = this.findNearestOrangeBlob(pt.x, pt.y, 60);
+        if (snap) pt = snap;
+
+        this.dragPoint = pt;
         this.drawMarkers(); // show preview immediately
     },
 
@@ -1782,8 +1822,12 @@ const distanceTracker = {
     handlePointerUp(e) {
         if (!this.dragging) return;
         this.dragging = false;
-        const pt = this.canvasCoords(e);
+        let pt = this.canvasCoords(e);
         this.dragPoint = null;
+
+        // Snap to nearest orange blob on release too
+        const snap = this.findNearestOrangeBlob(pt.x, pt.y, 30);
+        if (snap) pt = snap;
 
         this.clickPoints.push(pt);
 
@@ -1802,21 +1846,11 @@ const distanceTracker = {
             );
 
             if (this.mode === 'cal_frozen') {
-                // Record calibration data point
-                const dist = this.calDistances[this.calStep];
-                this.calData.push({ distanceCm: dist, pixelSep: pixSep });
-                this.calStep++;
-
-                if (this.calStep >= this.calDistances.length) {
-                    this.finishCalibration();
-                } else {
-                    // Move to next calibration distance after a pause
-                    setTimeout(() => {
-                        this.unfreezeFrame();
-                        this.mode = 'cal_live';
-                        this.updateUI();
-                    }, 1200);
-                }
+                // Single-point calibration: k = distance * pixelSep
+                const distInput = document.getElementById('cal-distance');
+                this.calDistanceCm = parseInt(distInput.value) || 40;
+                this.calibrationK = this.calDistanceCm * pixSep;
+                this.finishCalibration(pixSep);
             } else if (this.mode === 'meas_frozen') {
                 if (!this.calibrationK) {
                     document.getElementById('camera-status').textContent = 'Calibrate first!';
@@ -1907,33 +1941,31 @@ const distanceTracker = {
         }
     },
 
-    // Compute calibration constant from all ground-truth points
-    finishCalibration() {
-        // k = average(distanceCm * pixelSeparation) for all points
-        const kValues = this.calData.map(d => d.distanceCm * d.pixelSep);
-        this.calibrationK = kValues.reduce((a, b) => a + b, 0) / kValues.length;
-
+    // Complete calibration, save, and auto-close camera panel
+    finishCalibration(pixSep) {
         // Build color profile from accumulated samples
         this.colorProfile = this.buildColorProfile();
         this.saveSettings();
 
-        // Show the quick-measure button now that calibration is complete
+        // Show the quick-measure button
         if (this.colorProfile) {
             const qmBtn = document.getElementById('quick-measure-btn');
             if (qmBtn) qmBtn.style.display = '';
         }
 
-        // Show summary
-        const pairs = this.calData.map(d => `${d.distanceCm}cm=${d.pixelSep.toFixed(0)}px`).join(', ');
-        const autoMsg = this.colorProfile ? ' Auto-detect enabled.' : '';
+        // Brief confirmation then auto-close panel
         document.getElementById('camera-status').textContent =
-            `Calibrated! k=${this.calibrationK.toFixed(0)} (${pairs})${autoMsg}`;
-        this.mode = 'live';
+            `Calibrated! k=${this.calibrationK.toFixed(0)} (${this.calDistanceCm}cm @ ${pixSep.toFixed(0)}px)`;
 
         setTimeout(() => {
-            this.unfreezeFrame();
-            this.updateUI();
-        }, 2000);
+            // Close camera panel and stop stream
+            this.stop();
+            const panel = document.getElementById('camera-panel');
+            panel.classList.add('hidden');
+            panel.classList.remove('calibrating');
+            document.getElementById('cal-distance-row').style.display = 'none';
+            document.getElementById('camera-track-btn').classList.remove('active');
+        }, 1200);
     },
 
     // Update button visibility and status text based on current mode
@@ -1962,22 +1994,15 @@ const distanceTracker = {
                 break;
 
             case 'cal_live':
-                status.textContent = `Calibration ${this.calStep + 1}/${this.calDistances.length}: ` +
-                    `Hold tablet at ${this.calDistances[this.calStep]} cm \u2192 Capture`;
+                status.textContent = 'Set distance below, then press Capture';
                 captureBtn.style.display = '';
                 break;
 
             case 'cal_frozen':
                 if (this.clickPoints.length === 0) {
-                    status.textContent = 'Click & drag onto the FIRST orange sticker';
+                    status.textContent = 'Click on the FIRST orange sticker (snaps to orange)';
                 } else if (this.clickPoints.length === 1) {
-                    status.textContent = 'Click & drag onto the SECOND orange sticker';
-                } else {
-                    const last = this.calData[this.calData.length - 1];
-                    if (last) {
-                        status.textContent = `Captured ${last.distanceCm} cm (${last.pixelSep.toFixed(0)}px). ` +
-                            (this.calStep < this.calDistances.length ? 'Next\u2026' : 'Finishing\u2026');
-                    }
+                    status.textContent = 'Click on the SECOND orange sticker';
                 }
                 break;
 
@@ -2030,48 +2055,64 @@ const distanceTracker = {
     },
 
     // Silent background measurement — no camera UI shown.
-    // Opens camera, grabs one frame, auto-detects markers, updates slider, closes camera.
+    // Uses a temporary offscreen video element to avoid display:none issues.
     async quickMeasure() {
         if (!this.calibrationK || !this.colorProfile) return false;
 
-        // Ensure video/canvas elements are referenced
-        if (!this.video) this.video = document.getElementById('camera-video');
+        // Ensure canvas is referenced (for autoDetectMarkers compactness check)
         if (!this.canvas) {
             this.canvas = document.getElementById('camera-canvas');
             this.ctx = this.canvas.getContext('2d');
         }
 
+        let tempVideo = null;
+        let stream = null;
         try {
-            // Start camera stream (video element stays hidden inside the hidden panel)
-            const stream = await navigator.mediaDevices.getUserMedia({
+            // Create a temporary offscreen video (avoids display:none blocking)
+            tempVideo = document.createElement('video');
+            tempVideo.autoplay = true;
+            tempVideo.playsInline = true;
+            tempVideo.muted = true;
+            tempVideo.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;';
+            document.body.appendChild(tempVideo);
+
+            stream = await navigator.mediaDevices.getUserMedia({
                 video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }
             });
-            this.video.srcObject = stream;
-            await this.video.play();
-
-            this.canvas.width = this.video.videoWidth;
-            this.canvas.height = this.video.videoHeight;
+            tempVideo.srcObject = stream;
+            await tempVideo.play();
 
             // Let auto-exposure settle
-            await new Promise(r => setTimeout(r, 500));
+            await new Promise(r => setTimeout(r, 600));
+
+            // Use an offscreen canvas for the capture
+            const w = tempVideo.videoWidth, h = tempVideo.videoHeight;
+            const offCanvas = document.createElement('canvas');
+            offCanvas.width = w;
+            offCanvas.height = h;
+            const offCtx = offCanvas.getContext('2d');
 
             // Capture frame (mirrored, same as calibration)
-            const w = this.canvas.width, h = this.canvas.height;
-            this.ctx.save();
-            this.ctx.translate(w, 0);
-            this.ctx.scale(-1, 1);
-            this.ctx.drawImage(this.video, 0, 0, w, h);
-            this.ctx.restore();
-            this.frozenImageData = this.ctx.getImageData(0, 0, w, h);
+            offCtx.save();
+            offCtx.translate(w, 0);
+            offCtx.scale(-1, 1);
+            offCtx.drawImage(tempVideo, 0, 0, w, h);
+            offCtx.restore();
 
             // Stop camera immediately
             stream.getTracks().forEach(t => t.stop());
-            this.video.srcObject = null;
+            stream = null;
+            tempVideo.srcObject = null;
+            document.body.removeChild(tempVideo);
+            tempVideo = null;
 
-            // Run auto-detection
+            // Set up state for autoDetectMarkers
+            this.frozenImageData = offCtx.getImageData(0, 0, w, h);
+            this.canvas.width = w;
+            this.canvas.height = h;
+
             const markers = this.autoDetectMarkers();
             this.frozenImageData = null;
-            this.ctx.clearRect(0, 0, w, h);
 
             if (markers) {
                 const pixSep = Math.hypot(markers[0].x - markers[1].x, markers[0].y - markers[1].y);
@@ -2087,6 +2128,9 @@ const distanceTracker = {
             return false;
         } catch (err) {
             console.error('Quick measure failed:', err);
+            // Clean up on error
+            if (stream) stream.getTracks().forEach(t => t.stop());
+            if (tempVideo && tempVideo.parentNode) document.body.removeChild(tempVideo);
             return false;
         }
     }
