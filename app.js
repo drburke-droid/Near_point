@@ -1132,11 +1132,11 @@ const distanceTracker = {
     processingWidth: 640,
     lastPixelSeparation: null,
 
-    // Green color thresholds (HSV)
-    hueMin: 60,
-    hueMax: 160,
-    satMin: 30,
-    valMin: 30,
+    // Orange color thresholds (HSV)
+    hueMin: 5,
+    hueMax: 35,
+    satMin: 40,
+    valMin: 40,
 
     // Smoothing
     distanceHistory: [],
@@ -1249,7 +1249,7 @@ const distanceTracker = {
         const sy = oh / ph;
 
         // Draw detected markers
-        ctx.fillStyle = 'rgba(0, 255, 100, 0.4)';
+        ctx.fillStyle = 'rgba(255, 140, 0, 0.4)';
         [markers.a, markers.b].forEach(m => {
             ctx.beginPath();
             ctx.arc(m.x * sx, m.y * sy, 14, 0, Math.PI * 2);
@@ -1257,7 +1257,7 @@ const distanceTracker = {
         });
 
         // Line between markers
-        ctx.strokeStyle = 'rgba(0, 255, 100, 0.7)';
+        ctx.strokeStyle = 'rgba(255, 140, 0, 0.7)';
         ctx.lineWidth = 2;
         ctx.setLineDash([6, 4]);
         ctx.beginPath();
