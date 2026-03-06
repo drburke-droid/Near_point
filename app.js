@@ -506,6 +506,48 @@ PROJ-1237  Update TLS certificates before March expiry
            Status: Done | Story Points: 2`
             }
         ]
+    },
+    'musician': {
+        title: 'Musician',
+        apps: [
+            {
+                name: 'Standard Sheet Music (7mm staff)',
+                description: 'Printed Sheet Music \u2014 Standard Part',
+                sheetMusic: {
+                    staffSpaceMM: 1.75,
+                    keySig: 1,
+                    timeSig: [4, 4],
+                    bars: [
+                        [{p:6,d:.5,bm:'a'},{p:7,d:.5,bm:'a'},{p:8,d:1},{p:9,d:2}],
+                        [{p:7,d:1},{p:6,d:.5,bm:'b'},{p:5,d:.5,bm:'b'},{p:4,d:1},{p:3,d:1}],
+                        [{p:2,d:2},{p:4,d:.5,bm:'c'},{p:6,d:.5,bm:'c'},{p:5,d:1}],
+                        [{p:4,d:2,dot:1},{r:1,d:1}]
+                    ]
+                }
+            },
+            {
+                name: 'Miniature Score (4.4mm staff)',
+                description: 'Orchestral Study Score \u2014 Pocket Edition',
+                sheetMusic: {
+                    staffSpaceMM: 1.1,
+                    keySig: 2,
+                    timeSig: [3, 4],
+                    bars: [
+                        [{p:8,d:1},{p:7,d:.5,bm:'d'},{p:6,d:.5,bm:'d'},{p:5,d:1}],
+                        [{p:4,d:1.5},{p:3,d:.5},{p:2,d:1}],
+                        [{p:3,d:.5,bm:'e'},{p:4,d:.5,bm:'e'},{p:5,d:.5,bm:'f'},{p:6,d:.5,bm:'f'},{p:7,d:1}],
+                        [{p:5,d:2,dot:1}]
+                    ]
+                }
+            },
+            {
+                name: 'Lead Sheet / Chord Chart (12pt)',
+                description: 'Real Book Style \u2014 Chord Chart',
+                font: '"Courier New", "Consolas", monospace',
+                fontSize: 12,
+                sample: `  Cmaj7        Dm7          G7           Cmaj7\n\u2502  /  /  /  /  \u2502  /  /  /  /  \u2502  /  /  /  /  \u2502  /  /  /  /  \u2502\n\n  Am7          D7           Gmaj7        Em7\n\u2502  /  /  /  /  \u2502  /  /  /  /  \u2502  /  /  /  /  \u2502  /  /  /  /  \u2502\n\n  Fmaj7        Fm7          Em7          A7\n\u2502  /  /  /  /  \u2502  /  /  /  /  \u2502  /  /  /  /  \u2502  /  /  /  /  \u2502\n\n  Dm7          G7           Cmaj7        Cmaj7\n\u2502  /  /  /  /  \u2502  /  /  /  /  \u2502  /  /  /  /  \u2502  /  /  /  /  \u2551`
+            }
+        ]
     }
 };
 
@@ -863,6 +905,36 @@ function setupTestScreen() {
     cvs.addEventListener('touchmove',  (e) => { e.preventDefault(); distanceTracker.handlePointerMove(e.touches[0]); }, { passive: false });
     cvs.addEventListener('touchend',   (e) => { e.preventDefault(); distanceTracker.handlePointerUp(e.changedTouches[0]); }, { passive: false });
 
+    // Load saved calibration early so the quick-measure button can show
+    distanceTracker.loadSettings();
+    const qmBtn = $('#quick-measure-btn');
+    if (distanceTracker.calibrationK && distanceTracker.colorProfile) {
+        qmBtn.style.display = '';
+    }
+
+    // Quick-measure button — silent background measurement
+    qmBtn.addEventListener('click', async () => {
+        const valueSpan = $('#standard-distance-value');
+        const origText = valueSpan.textContent;
+        qmBtn.disabled = true;
+        valueSpan.textContent = 'Measuring\u2026';
+
+        const ok = await distanceTracker.quickMeasure();
+
+        qmBtn.disabled = false;
+        if (!ok) {
+            valueSpan.textContent = origText;
+            // Fall back to opening the camera panel for manual mode
+            const panel = $('#camera-panel');
+            if (panel.classList.contains('hidden')) {
+                panel.classList.remove('hidden');
+                $('#camera-track-btn').classList.add('active');
+                distanceTracker.start();
+            }
+            distanceTracker.startMeasure();
+        }
+    });
+
     // Back button
     $('#back-btn').addEventListener('click', () => showScreen('input'));
 }
@@ -950,6 +1022,189 @@ function renderStandardTestType(testDistanceCm) {
     });
 }
 
+// Build an SVG element containing sheet music notation.
+// ss = staff space in CSS pixels; music = {keySig, timeSig, bars}
+// Engraving proportions follow standard music publishing (Gould, Behind Bars):
+//   notehead height = 1 staff space, width ≈ 1.3 ss, stem = 3.5 ss
+function buildSheetMusicSVG(ss, music) {
+    const NS = 'http://www.w3.org/2000/svg';
+    const mk = (tag, a) => {
+        const e = document.createElementNS(NS, tag);
+        for (const k in a) e.setAttribute(k, a[k]);
+        return e;
+    };
+    // Note position to y in staff-space units from top line
+    // pos 0=E4(bottom line), 8=F5(top line)
+    const ny = p => (8 - p) * 0.5;
+
+    const NHW = 0.65, NHH = 0.47; // notehead radii (ss)
+    const STEM = 3.5;
+    const BEATW = 2.2;
+    const BPAD = 0.8;
+
+    const preamble = 3.5 + (music.keySig || 0) * 1.2 + (music.keySig ? 0.5 : 0) + 2.5;
+    let totalBeats = 0;
+    music.bars.forEach(b => b.forEach(n => { totalBeats += n.dot ? n.d * 1.5 : n.d; }));
+    const W = preamble + totalBeats * BEATW + music.bars.length * BPAD + 1.5;
+
+    const mt = 2.5, mb = 1.5;
+    const svgW = W * ss, svgH = (4 + mt + mb) * ss;
+    const sY = mt * ss; // y of top staff line
+
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('width', svgW);
+    svg.setAttribute('height', svgH);
+    svg.setAttribute('viewBox', `0 0 ${svgW} ${svgH}`);
+    svg.style.display = 'block';
+    svg.style.overflow = 'visible';
+
+    // Staff lines
+    const slw = Math.max(0.5, 0.1 * ss);
+    for (let i = 0; i < 5; i++)
+        svg.appendChild(mk('line', { x1: 0, y1: sY + i * ss, x2: svgW, y2: sY + i * ss, stroke: '#000', 'stroke-width': slw }));
+
+    let cx = 0.5 * ss;
+
+    // Treble clef (Unicode character with font fallbacks)
+    const clef = mk('text', {
+        x: cx, y: sY + 4 * ss,
+        'font-size': (6.5 * ss) + 'px',
+        'font-family': '"Noto Music","Segoe UI Symbol","Apple Symbols",serif',
+        fill: '#000'
+    });
+    clef.textContent = String.fromCodePoint(0x1D11E);
+    svg.appendChild(clef);
+    cx += 3.5 * ss;
+
+    // Key signature sharps
+    if (music.keySig > 0) {
+        const spos = [8, 5, 9, 6, 3, 7, 4]; // standard sharp order on treble staff
+        for (let i = 0; i < music.keySig; i++) {
+            const t = mk('text', {
+                x: cx, y: sY + ny(spos[i]) * ss,
+                'font-size': (1.6 * ss) + 'px', 'font-family': 'serif',
+                fill: '#000', 'dominant-baseline': 'central'
+            });
+            t.textContent = '\u266F';
+            svg.appendChild(t);
+            cx += 1.2 * ss;
+        }
+        cx += 0.5 * ss;
+    }
+
+    // Time signature
+    [[music.timeSig[0], sY + ss], [music.timeSig[1], sY + 3 * ss]].forEach(([n, y]) => {
+        const t = mk('text', {
+            x: cx + ss, y: y,
+            'font-size': (1.9 * ss) + 'px',
+            'font-family': '"Times New Roman",serif',
+            'font-weight': 'bold', fill: '#000',
+            'dominant-baseline': 'central', 'text-anchor': 'middle'
+        });
+        t.textContent = String(n);
+        svg.appendChild(t);
+    });
+    cx += 2.5 * ss;
+
+    // Render bars
+    const stemW = Math.max(1, 0.12 * ss);
+    music.bars.forEach((bar, barIdx) => {
+        cx += BPAD * ss;
+        const beams = {};
+
+        bar.forEach(note => {
+            const dur = note.dot ? note.d * 1.5 : note.d;
+
+            if (note.r) {
+                // Rests
+                const rx = cx + dur * BEATW * ss * 0.4;
+                if (note.d === 1) {
+                    // Quarter rest (zigzag approximation)
+                    svg.appendChild(mk('path', {
+                        d: `M${rx - 0.15 * ss},${sY + 1.2 * ss} l${0.4 * ss},${0.5 * ss} l${-0.4 * ss},${0.5 * ss} l${0.4 * ss},${0.5 * ss} l${-0.2 * ss},${0.4 * ss}`,
+                        stroke: '#000', 'stroke-width': Math.max(1, 0.13 * ss),
+                        fill: 'none', 'stroke-linecap': 'round'
+                    }));
+                } else if (note.d === 2) {
+                    // Half rest (rectangle on middle line)
+                    svg.appendChild(mk('rect', {
+                        x: rx - 0.5 * ss, y: sY + 1.5 * ss,
+                        width: ss, height: 0.5 * ss, fill: '#000'
+                    }));
+                }
+                cx += dur * BEATW * ss;
+                return;
+            }
+
+            const nx = cx + 0.1 * ss;
+            const nYpx = sY + ny(note.p) * ss;
+            const up = note.p <= 4; // on or below middle line → stem up
+            const filled = note.d <= 1;
+
+            // Ledger lines (above staff)
+            for (let lp = 10; lp <= note.p; lp += 2) {
+                const ly = sY + ny(lp) * ss;
+                svg.appendChild(mk('line', { x1: nx - NHW * ss - 0.3 * ss, y1: ly, x2: nx + NHW * ss + 0.3 * ss, y2: ly, stroke: '#000', 'stroke-width': slw }));
+            }
+            // Ledger lines (below staff)
+            for (let lp = -2; lp >= note.p; lp -= 2) {
+                const ly = sY + ny(lp) * ss;
+                svg.appendChild(mk('line', { x1: nx - NHW * ss - 0.3 * ss, y1: ly, x2: nx + NHW * ss + 0.3 * ss, y2: ly, stroke: '#000', 'stroke-width': slw }));
+            }
+
+            // Notehead (ellipse, slight tilt per engraving convention)
+            svg.appendChild(mk('ellipse', {
+                cx: nx, cy: nYpx, rx: NHW * ss, ry: NHH * ss,
+                fill: filled ? '#000' : 'none', stroke: '#000',
+                'stroke-width': filled ? 0 : Math.max(1, 0.13 * ss),
+                transform: `rotate(-15,${nx},${nYpx})`
+            }));
+
+            // Stem (not drawn for whole notes)
+            if (note.d < 4) {
+                const sx = up ? nx + NHW * ss * 0.85 : nx - NHW * ss * 0.85;
+                const se = up ? nYpx - STEM * ss : nYpx + STEM * ss;
+                svg.appendChild(mk('line', { x1: sx, y1: nYpx, x2: sx, y2: se, stroke: '#000', 'stroke-width': stemW }));
+
+                if (note.bm) {
+                    if (!beams[note.bm]) beams[note.bm] = [];
+                    beams[note.bm].push({ sx, se });
+                } else if (note.d <= 0.5) {
+                    // Flag for unbeamed eighth note
+                    const dir = up ? 1 : -1;
+                    svg.appendChild(mk('path', {
+                        d: `M${sx},${se} q${0.6 * ss},${dir * 0.6 * ss} ${0.1 * ss},${dir * 1.4 * ss}`,
+                        stroke: '#000', 'stroke-width': Math.max(1, 0.14 * ss), fill: 'none'
+                    }));
+                }
+            }
+
+            // Augmentation dot
+            if (note.dot) {
+                const dy = (note.p % 2 === 0) ? nYpx - 0.25 * ss : nYpx;
+                svg.appendChild(mk('circle', { cx: nx + NHW * ss + 0.35 * ss, cy: dy, r: 0.15 * ss, fill: '#000' }));
+            }
+
+            cx += dur * BEATW * ss;
+        });
+
+        // Beams connecting grouped eighth notes
+        for (const gid in beams) {
+            const g = beams[gid];
+            if (g.length >= 2)
+                svg.appendChild(mk('line', { x1: g[0].sx, y1: g[0].se, x2: g[g.length - 1].sx, y2: g[g.length - 1].se, stroke: '#000', 'stroke-width': 0.5 * ss }));
+        }
+
+        // Barline
+        svg.appendChild(mk('line', { x1: cx, y1: sY, x2: cx, y2: sY + 4 * ss, stroke: '#000', 'stroke-width': Math.max(1, 0.16 * ss) }));
+    });
+
+    // Final thick barline (double bar)
+    svg.appendChild(mk('line', { x1: cx + 0.35 * ss, y1: sY, x2: cx + 0.35 * ss, y2: sY + 4 * ss, stroke: '#000', 'stroke-width': Math.max(1, 0.3 * ss) }));
+
+    return svg;
+}
+
 function renderOccupationSamples() {
     const container = $('#occupation-test-container');
     container.innerHTML = '';
@@ -967,15 +1222,20 @@ function renderOccupationSamples() {
 
     occData.apps.forEach(app => {
         const fontUnit = app.fontUnit || 'pt';
-        // Calculate the physical em-size of this font on the patient's monitor
-        const physicalEmMM = getPhysicalEmSize(app.fontSize, fontUnit, monitorPPI, state.displayScaling);
-        // Render at that physical size on the tablet, reduced 10% for occupation samples
-        const cssFontSize = mmToCSS(physicalEmMM) * 0.9;
+        let physicalEmMM, cssFontSize, equivalentM;
 
-        // Calculate what M-notation this corresponds to (for clinical reference)
-        const xRatio = getXHeightRatio(app.font);
-        const xHeightMM = physicalEmMM * xRatio;
-        const equivalentM = xHeightMM / M_UNIT_MM;
+        if (app.sheetMusic) {
+            // Sheet music: staff space is the critical physical dimension
+            // Notehead height = 1 staff space, so use it as the reference size
+            physicalEmMM = app.sheetMusic.staffSpaceMM;
+            equivalentM = physicalEmMM / M_UNIT_MM;
+        } else {
+            physicalEmMM = getPhysicalEmSize(app.fontSize, fontUnit, monitorPPI, state.displayScaling);
+            cssFontSize = mmToCSS(physicalEmMM) * 0.9;
+            const xRatio = getXHeightRatio(app.font);
+            const xHeightMM = physicalEmMM * xRatio;
+            equivalentM = xHeightMM / M_UNIT_MM;
+        }
 
         const sample = document.createElement('div');
         sample.className = 'occupation-sample';
@@ -992,7 +1252,12 @@ function renderOccupationSamples() {
         const content = document.createElement('div');
         content.className = 'sample-content' + (app.dark ? ' dark' : '');
 
-        if (app.tabular) {
+        if (app.sheetMusic) {
+            const staffSpacePx = mmToCSS(app.sheetMusic.staffSpaceMM) * 0.9;
+            content.style.padding = '12px';
+            content.style.overflowX = 'auto';
+            content.appendChild(buildSheetMusicSVG(staffSpacePx, app.sheetMusic));
+        } else if (app.tabular) {
             const table = document.createElement('table');
             table.className = 'sample-table';
             table.style.fontFamily = app.font;
@@ -1035,11 +1300,19 @@ function renderOccupationSamples() {
         // Meta info
         const meta = document.createElement('div');
         meta.className = 'sample-meta';
-        const sizeLabel = fontUnit === 'px' ? `${app.fontSize}px` : `${app.fontSize}pt`;
-        meta.innerHTML =
-            `<span><strong>App font:</strong> ${sizeLabel} ${app.font.split(',')[0].replace(/"/g, '')}</span>` +
-            `<span><strong>Physical size:</strong> ${physicalEmMM.toFixed(2)}mm em</span>` +
-            `<span><strong>Approx:</strong> ${equivalentM.toFixed(2)}M</span>`;
+        if (app.sheetMusic) {
+            const ssMM = app.sheetMusic.staffSpaceMM;
+            meta.innerHTML =
+                `<span><strong>Staff height:</strong> ${(ssMM * 4).toFixed(1)}mm (${ssMM.toFixed(2)}mm space)</span>` +
+                `<span><strong>Notehead:</strong> ${ssMM.toFixed(2)}mm</span>` +
+                `<span><strong>Approx:</strong> ${equivalentM.toFixed(2)}M</span>`;
+        } else {
+            const sizeLabel = fontUnit === 'px' ? `${app.fontSize}px` : `${app.fontSize}pt`;
+            meta.innerHTML =
+                `<span><strong>App font:</strong> ${sizeLabel} ${app.font.split(',')[0].replace(/"/g, '')}</span>` +
+                `<span><strong>Physical size:</strong> ${physicalEmMM.toFixed(2)}mm em</span>` +
+                `<span><strong>Approx:</strong> ${equivalentM.toFixed(2)}M</span>`;
+        }
 
         sample.appendChild(titlebar);
         sample.appendChild(content);
@@ -1644,6 +1917,12 @@ const distanceTracker = {
         this.colorProfile = this.buildColorProfile();
         this.saveSettings();
 
+        // Show the quick-measure button now that calibration is complete
+        if (this.colorProfile) {
+            const qmBtn = document.getElementById('quick-measure-btn');
+            if (qmBtn) qmBtn.style.display = '';
+        }
+
         // Show summary
         const pairs = this.calData.map(d => `${d.distanceCm}cm=${d.pixelSep.toFixed(0)}px`).join(', ');
         const autoMsg = this.colorProfile ? ' Auto-detect enabled.' : '';
@@ -1747,6 +2026,68 @@ const distanceTracker = {
             if (data.calibrationK) this.calibrationK = data.calibrationK;
             if (data.markerSeparationMM) this.markerSeparationMM = data.markerSeparationMM;
             if (data.colorProfile) this.colorProfile = data.colorProfile;
+        }
+    },
+
+    // Silent background measurement — no camera UI shown.
+    // Opens camera, grabs one frame, auto-detects markers, updates slider, closes camera.
+    async quickMeasure() {
+        if (!this.calibrationK || !this.colorProfile) return false;
+
+        // Ensure video/canvas elements are referenced
+        if (!this.video) this.video = document.getElementById('camera-video');
+        if (!this.canvas) {
+            this.canvas = document.getElementById('camera-canvas');
+            this.ctx = this.canvas.getContext('2d');
+        }
+
+        try {
+            // Start camera stream (video element stays hidden inside the hidden panel)
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }
+            });
+            this.video.srcObject = stream;
+            await this.video.play();
+
+            this.canvas.width = this.video.videoWidth;
+            this.canvas.height = this.video.videoHeight;
+
+            // Let auto-exposure settle
+            await new Promise(r => setTimeout(r, 500));
+
+            // Capture frame (mirrored, same as calibration)
+            const w = this.canvas.width, h = this.canvas.height;
+            this.ctx.save();
+            this.ctx.translate(w, 0);
+            this.ctx.scale(-1, 1);
+            this.ctx.drawImage(this.video, 0, 0, w, h);
+            this.ctx.restore();
+            this.frozenImageData = this.ctx.getImageData(0, 0, w, h);
+
+            // Stop camera immediately
+            stream.getTracks().forEach(t => t.stop());
+            this.video.srcObject = null;
+
+            // Run auto-detection
+            const markers = this.autoDetectMarkers();
+            this.frozenImageData = null;
+            this.ctx.clearRect(0, 0, w, h);
+
+            if (markers) {
+                const pixSep = Math.hypot(markers[0].x - markers[1].x, markers[0].y - markers[1].y);
+                const distCm = Math.round(this.calibrationK / pixSep);
+
+                const slider = document.getElementById('standard-distance-slider');
+                const clamped = Math.max(parseInt(slider.min), Math.min(parseInt(slider.max), distCm));
+                slider.value = clamped;
+                document.getElementById('standard-distance-value').textContent = clamped + ' cm';
+                renderStandardTestType(clamped);
+                return true;
+            }
+            return false;
+        } catch (err) {
+            console.error('Quick measure failed:', err);
+            return false;
         }
     }
 };

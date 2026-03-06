@@ -928,8 +928,10 @@ h3 {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 32px;
+    gap: 4px;
+    min-width: 32px;
     height: 32px;
+    padding: 0 6px;
     border: 1px solid rgba(255, 255, 255, 0.2);
     border-radius: var(--radius-sm);
     background: transparent;
@@ -937,6 +939,8 @@ h3 {
     cursor: pointer;
     transition: all var(--duration-normal) var(--ease-out);
     flex-shrink: 0;
+    font-size: 0.75rem;
+    white-space: nowrap;
 }
 
 .btn-camera:hover,
