@@ -854,7 +854,14 @@ function setupTestScreen() {
     $('#camera-capture-btn').addEventListener('click', () => distanceTracker.capture());
     $('#camera-calibrate-btn').addEventListener('click', () => distanceTracker.startCalibration());
     $('#camera-measure-btn').addEventListener('click', () => distanceTracker.startMeasure());
-    $('#camera-canvas').addEventListener('click', (e) => distanceTracker.handleCanvasClick(e));
+    // Click-and-drag marker placement (mouse + touch)
+    const cvs = $('#camera-canvas');
+    cvs.addEventListener('mousedown', (e) => distanceTracker.handlePointerDown(e));
+    cvs.addEventListener('mousemove', (e) => distanceTracker.handlePointerMove(e));
+    cvs.addEventListener('mouseup',   (e) => distanceTracker.handlePointerUp(e));
+    cvs.addEventListener('touchstart', (e) => { e.preventDefault(); distanceTracker.handlePointerDown(e.touches[0]); }, { passive: false });
+    cvs.addEventListener('touchmove',  (e) => { e.preventDefault(); distanceTracker.handlePointerMove(e.touches[0]); }, { passive: false });
+    cvs.addEventListener('touchend',   (e) => { e.preventDefault(); distanceTracker.handlePointerUp(e.changedTouches[0]); }, { passive: false });
 
     // Back button
     $('#back-btn').addEventListener('click', () => showScreen('input'));
@@ -1152,7 +1159,9 @@ const distanceTracker = {
         return { h, s, v };
     },
 
-    // Sample pixels around a click point to learn the sticker color
+    // Sample pixels around a click point to learn the sticker color.
+    // Filters out low-saturation/low-brightness pixels that are likely background
+    // leaking in from the edge of the sampling radius.
     sampleColorAtPoint(imageData, cx, cy, radius) {
         const w = imageData.width;
         const h = imageData.height;
@@ -1166,7 +1175,10 @@ const distanceTracker = {
                 if (px < 0 || px >= w || py < 0 || py >= h) continue;
                 const idx = (py * w + px) * 4;
                 const hsv = this.rgbToHsv(data[idx], data[idx + 1], data[idx + 2]);
-                samples.push(hsv);
+                // Only keep clearly colored pixels — skip grays/whites/blacks
+                if (hsv.s >= 20 && hsv.v >= 20) {
+                    samples.push(hsv);
+                }
             }
         }
         return samples;
@@ -1191,14 +1203,15 @@ const distanceTracker = {
         const sMean = mean(sVals), sStd = std(sVals);
         const vMean = mean(vVals), vStd = std(vVals);
 
-        // Use 3*std + padding of 10 for hue, 15 for sat/val
+        // Use 2*std + small padding for tighter matching
+        // Enforce minimum saturation & value floors — orange stickers are vivid and bright
         return {
-            hMin: Math.max(0, hMean - 3 * hStd - 10),
-            hMax: Math.min(360, hMean + 3 * hStd + 10),
-            sMin: Math.max(0, sMean - 3 * sStd - 15),
-            sMax: Math.min(100, sMean + 3 * sStd + 15),
-            vMin: Math.max(0, vMean - 3 * vStd - 15),
-            vMax: Math.min(100, vMean + 3 * vStd + 15)
+            hMin: Math.max(0, hMean - 2 * hStd - 5),
+            hMax: Math.min(360, hMean + 2 * hStd + 5),
+            sMin: Math.max(30, sMean - 2 * sStd - 10),
+            sMax: Math.min(100, sMean + 2 * sStd + 10),
+            vMin: Math.max(30, vMean - 2 * vStd - 10),
+            vMax: Math.min(100, vMean + 2 * vStd + 10)
         };
     },
 
@@ -1225,42 +1238,92 @@ const distanceTracker = {
             }
         }
 
-        if (matchingPixels.length < 6) return null;
+        if (matchingPixels.length < 10) return null;
 
         return this.clusterMarkers(matchingPixels);
     },
 
-    // Cluster matching pixels into two groups and return centroids
+    // Cluster matching pixels into blobs via connected-component labeling,
+    // then return centroids of the two largest compact blobs.
     clusterMarkers(pixels) {
-        // Sort by x position
-        pixels.sort((a, b) => a.x - b.x);
+        if (pixels.length < 10) return null;
 
-        // Find the largest gap in x to split into two clusters
-        let maxGap = 0, splitIdx = 0;
-        for (let i = 1; i < pixels.length; i++) {
-            const gap = pixels[i].x - pixels[i - 1].x;
-            if (gap > maxGap) {
-                maxGap = gap;
-                splitIdx = i;
-            }
+        // Grid-based connected component labeling (6px cells)
+        const cellSize = 6;
+        const grid = new Map();
+
+        for (const p of pixels) {
+            const key = `${Math.floor(p.x / cellSize)},${Math.floor(p.y / cellSize)}`;
+            if (!grid.has(key)) grid.set(key, []);
+            grid.get(key).push(p);
         }
 
-        // The gap must be significant (at least 20px) to be two separate markers
-        if (maxGap < 20) return null;
+        // BFS flood-fill to find connected components
+        const visited = new Set();
+        const components = [];
 
-        const group1 = pixels.slice(0, splitIdx);
-        const group2 = pixels.slice(splitIdx);
+        for (const key of grid.keys()) {
+            if (visited.has(key)) continue;
+            visited.add(key);
 
-        // Each group should have a reasonable number of pixels
-        if (group1.length < 3 || group2.length < 3) return null;
+            const component = [...grid.get(key)];
+            const queue = [key];
 
-        // Compute centroids
+            while (queue.length > 0) {
+                const current = queue.shift();
+                const [cx, cy] = current.split(',').map(Number);
+
+                // 8-connected neighbors
+                for (let dy = -1; dy <= 1; dy++) {
+                    for (let dx = -1; dx <= 1; dx++) {
+                        if (dx === 0 && dy === 0) continue;
+                        const nkey = `${cx + dx},${cy + dy}`;
+                        if (!visited.has(nkey) && grid.has(nkey)) {
+                            visited.add(nkey);
+                            component.push(...grid.get(nkey));
+                            queue.push(nkey);
+                        }
+                    }
+                }
+            }
+
+            components.push(component);
+        }
+
+        // Sort by pixel count descending, take two largest
+        components.sort((a, b) => b.length - a.length);
+        if (components.length < 2) return null;
+
+        // Each blob needs a minimum pixel count (at least 8, or 5% of all matches)
+        const minBlobSize = Math.max(8, pixels.length * 0.05);
+        if (components[0].length < minBlobSize || components[1].length < minBlobSize) return null;
+
+        // Compactness check — each blob's bounding box must be sticker-sized,
+        // not scattered noise spread across the image
+        const maxBlobSpan = Math.max(this.canvas.width, this.canvas.height) * 0.15;
+        for (const comp of [components[0], components[1]]) {
+            let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
+            for (const p of comp) {
+                if (p.x < xMin) xMin = p.x;
+                if (p.x > xMax) xMax = p.x;
+                if (p.y < yMin) yMin = p.y;
+                if (p.y > yMax) yMax = p.y;
+            }
+            if ((xMax - xMin) > maxBlobSpan || (yMax - yMin) > maxBlobSpan) return null;
+        }
+
         const centroid = arr => ({
             x: arr.reduce((s, p) => s + p.x, 0) / arr.length,
             y: arr.reduce((s, p) => s + p.y, 0) / arr.length
         });
 
-        return [centroid(group1), centroid(group2)];
+        const c1 = centroid(components[0]);
+        const c2 = centroid(components[1]);
+
+        // Centroids must be meaningfully separated (at least 30px)
+        if (Math.hypot(c1.x - c2.x, c1.y - c2.y) < 30) return null;
+
+        return [c1, c2];
     },
 
     async start() {
@@ -1414,18 +1477,46 @@ const distanceTracker = {
     },
 
     // Canvas click — mark sticker positions
-    handleCanvasClick(e) {
-        if (!this.frozen || this.clickPoints.length >= 2) return;
+    // --- Click-and-drag marker placement ---
+    // mousedown/touchstart: begin dragging a new marker
+    // mousemove/touchmove: live crosshair follows pointer
+    // mouseup/touchend: finalize the marker position
 
+    dragging: false,
+    dragPoint: null, // {x, y} current drag position in canvas coords
+
+    canvasCoords(e) {
         const rect = this.canvas.getBoundingClientRect();
-        const x = (e.clientX - rect.left) * (this.canvas.width / rect.width);
-        const y = (e.clientY - rect.top) * (this.canvas.height / rect.height);
+        return {
+            x: (e.clientX - rect.left) * (this.canvas.width / rect.width),
+            y: (e.clientY - rect.top) * (this.canvas.height / rect.height)
+        };
+    },
 
-        this.clickPoints.push({ x, y });
+    handlePointerDown(e) {
+        if (!this.frozen || this.clickPoints.length >= 2) return;
+        this.dragging = true;
+        this.dragPoint = this.canvasCoords(e);
+        this.drawMarkers(); // show preview immediately
+    },
 
-        // During calibration, learn the sticker color from each click
+    handlePointerMove(e) {
+        if (!this.dragging) return;
+        this.dragPoint = this.canvasCoords(e);
+        this.drawMarkers(); // redraw with live crosshair
+    },
+
+    handlePointerUp(e) {
+        if (!this.dragging) return;
+        this.dragging = false;
+        const pt = this.canvasCoords(e);
+        this.dragPoint = null;
+
+        this.clickPoints.push(pt);
+
+        // During calibration, learn the sticker color from each placed marker
         if (this.mode === 'cal_frozen' && this.frozenImageData) {
-            const samples = this.sampleColorAtPoint(this.frozenImageData, Math.round(x), Math.round(y), 12);
+            const samples = this.sampleColorAtPoint(this.frozenImageData, Math.round(pt.x), Math.round(pt.y), 12);
             this.colorSamples.push(...samples);
         }
 
@@ -1483,23 +1574,41 @@ const distanceTracker = {
         }
         const ctx = this.ctx;
 
+        // Draw finalized markers
         this.clickPoints.forEach((p, i) => {
-            // Crosshair
             ctx.strokeStyle = '#ff4444';
             ctx.lineWidth = 2;
             ctx.beginPath();
             ctx.moveTo(p.x - 18, p.y); ctx.lineTo(p.x + 18, p.y);
             ctx.moveTo(p.x, p.y - 18); ctx.lineTo(p.x, p.y + 18);
             ctx.stroke();
-            // Circle
             ctx.beginPath();
             ctx.arc(p.x, p.y, 22, 0, Math.PI * 2);
             ctx.stroke();
-            // Label
             ctx.fillStyle = '#ff4444';
             ctx.font = 'bold 16px Inter, sans-serif';
             ctx.fillText(i === 0 ? 'A' : 'B', p.x + 26, p.y - 12);
         });
+
+        // Draw live drag-preview crosshair (semi-transparent)
+        if (this.dragging && this.dragPoint) {
+            const p = this.dragPoint;
+            const label = this.clickPoints.length === 0 ? 'A' : 'B';
+            ctx.strokeStyle = 'rgba(255, 68, 68, 0.5)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(p.x - 18, p.y); ctx.lineTo(p.x + 18, p.y);
+            ctx.moveTo(p.x, p.y - 18); ctx.lineTo(p.x, p.y + 18);
+            ctx.stroke();
+            ctx.setLineDash([4, 4]);
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 22, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.fillStyle = 'rgba(255, 68, 68, 0.5)';
+            ctx.font = 'bold 16px Inter, sans-serif';
+            ctx.fillText(label, p.x + 26, p.y - 12);
+        }
 
         // Dashed line + pixel distance label
         if (this.clickPoints.length === 2) {
@@ -1581,9 +1690,9 @@ const distanceTracker = {
 
             case 'cal_frozen':
                 if (this.clickPoints.length === 0) {
-                    status.textContent = 'Click the FIRST orange sticker';
+                    status.textContent = 'Click & drag onto the FIRST orange sticker';
                 } else if (this.clickPoints.length === 1) {
-                    status.textContent = 'Click the SECOND orange sticker';
+                    status.textContent = 'Click & drag onto the SECOND orange sticker';
                 } else {
                     const last = this.calData[this.calData.length - 1];
                     if (last) {
@@ -1600,11 +1709,11 @@ const distanceTracker = {
 
             case 'meas_frozen':
                 if (this.clickPoints.length === 0) {
-                    status.textContent = 'Auto-detect failed. Click the FIRST orange sticker';
+                    status.textContent = 'Auto-detect failed. Click & drag onto the FIRST orange sticker';
                 } else if (this.clickPoints.length === 1) {
-                    status.textContent = 'Click the SECOND orange sticker';
+                    status.textContent = 'Click & drag onto the SECOND orange sticker';
                 }
-                // After 2 clicks, status is set in handleCanvasClick
+                // After 2 markers placed, status is set in handlePointerUp
                 if (this.clickPoints.length === 2) {
                     measBtn.style.display = '';
                     measBtn.textContent = 'Remeasure';
