@@ -235,14 +235,12 @@
                             mm
                         </label>
                     </div>
-                    <div class="camera-settings-row">
-                        <label>Calibrate at
-                            <input type="number" id="calibrate-distance" value="50" min="20" max="100" step="1">
-                            cm
-                        </label>
-                        <button id="camera-calibrate-btn" class="btn btn-small btn-primary">Calibrate</button>
+                    <div class="camera-btn-row">
+                        <button id="camera-capture-btn" class="btn btn-small btn-primary" style="display:none">Capture</button>
+                        <button id="camera-calibrate-btn" class="btn btn-small btn-primary" style="display:none">Calibrate</button>
+                        <button id="camera-measure-btn" class="btn btn-small btn-primary" style="display:none">Measure</button>
                     </div>
-                    <div class="camera-hint">Place two bright orange stickers on the phoropter at the spacing above</div>
+                    <div class="camera-hint">Place two bright orange 20mm stickers on the phoropter at the marker spacing above</div>
                 </div>
             </div>
             <div id="standard-test-container"></div>

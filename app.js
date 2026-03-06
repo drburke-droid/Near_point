@@ -831,7 +831,7 @@ function setupTestScreen() {
         renderOccupationSamples();
     });
 
-    // Camera tracking toggle
+    // Camera panel toggle
     $('#camera-track-btn').addEventListener('click', () => {
         const panel = $('#camera-panel');
         const btn = $('#camera-track-btn');
@@ -843,7 +843,6 @@ function setupTestScreen() {
             panel.classList.add('hidden');
             btn.classList.remove('active');
             distanceTracker.stop();
-            $('#camera-status').textContent = 'Camera off';
         }
     });
 
@@ -852,14 +851,10 @@ function setupTestScreen() {
         distanceTracker.saveSettings();
     });
 
-    $('#camera-calibrate-btn').addEventListener('click', () => {
-        const knownDist = parseInt($('#calibrate-distance').value) || 50;
-        if (distanceTracker.calibrate(knownDist)) {
-            $('#camera-status').textContent = 'Calibrated! Tracking...';
-        } else {
-            $('#camera-status').textContent = 'Hold markers visible to calibrate';
-        }
-    });
+    $('#camera-capture-btn').addEventListener('click', () => distanceTracker.capture());
+    $('#camera-calibrate-btn').addEventListener('click', () => distanceTracker.startCalibration());
+    $('#camera-measure-btn').addEventListener('click', () => distanceTracker.startMeasure());
+    $('#camera-canvas').addEventListener('click', (e) => distanceTracker.handleCanvasClick(e));
 
     // Back button
     $('#back-btn').addEventListener('click', () => showScreen('input'));
@@ -1107,47 +1102,39 @@ document.addEventListener('click', (e) => {
 });
 
 // ==========================================
-// CAMERA DISTANCE TRACKING
+// CAMERA DISTANCE MEASUREMENT
 // ==========================================
-// Uses two bright green stickers on the phoropter.
-// Detects them via color thresholding and calculates
-// distance using the pinhole camera model:
-//   distance = (known_separation × focal_length_px) / pixel_separation
+// Freeze-frame approach: user captures a still frame, then clicks
+// on each of the two orange stickers to mark them precisely.
+// Multi-point calibration (40, 50, 60, 80 cm) builds an accurate
+// distance model. Measurement uses: distance = k / pixelSeparation
+// where k is the averaged calibration constant.
 
 const distanceTracker = {
     stream: null,
     video: null,
-    procCanvas: null,
-    procCtx: null,
-    overlayCanvas: null,
-    overlayCtx: null,
-    active: false,
-    timeoutId: null,
+    canvas: null,
+    ctx: null,
 
-    // Settings (persisted)
-    markerSeparationMM: 120, // physical distance between stickers
-    focalLengthPx: null,     // calibrated focal length at processing resolution
+    // State
+    mode: 'off', // off | live | cal_live | cal_frozen | meas_live | meas_frozen
+    frozen: false,
+    frozenImageData: null,
+    clickPoints: [],       // [{x,y}] for current frame (max 2)
 
-    // Processing
-    processingWidth: 640,
-    lastPixelSeparation: null,
+    // Calibration
+    calDistances: [40, 50, 60, 80], // cm ground-truth distances
+    calStep: 0,
+    calData: [],           // [{distanceCm, pixelSep}]
+    calibrationK: null,    // calibration constant (cm * px)
 
-    // Orange color thresholds (HSV)
-    hueMin: 5,
-    hueMax: 35,
-    satMin: 40,
-    valMin: 40,
-
-    // Smoothing
-    distanceHistory: [],
-    smoothingWindow: 5,
+    // Settings
+    markerSeparationMM: 120,
 
     async start() {
         this.video = document.getElementById('camera-video');
-        this.overlayCanvas = document.getElementById('camera-canvas');
-        this.overlayCtx = this.overlayCanvas.getContext('2d');
-        this.procCanvas = document.createElement('canvas');
-        this.procCtx = this.procCanvas.getContext('2d', { willReadFrequently: true });
+        this.canvas = document.getElementById('camera-canvas');
+        this.ctx = this.canvas.getContext('2d');
 
         try {
             this.stream = await navigator.mediaDevices.getUserMedia({
@@ -1156,208 +1143,288 @@ const distanceTracker = {
             this.video.srcObject = this.stream;
             await this.video.play();
 
-            // Size the processing canvas
-            const aspect = this.video.videoHeight / this.video.videoWidth;
-            this.procCanvas.width = this.processingWidth;
-            this.procCanvas.height = Math.round(this.processingWidth * aspect);
+            // Size canvas to match video resolution
+            this.canvas.width = this.video.videoWidth;
+            this.canvas.height = this.video.videoHeight;
 
-            // Size the overlay to match the video
-            this.overlayCanvas.width = this.video.videoWidth;
-            this.overlayCanvas.height = this.video.videoHeight;
-
-            // Load saved calibration or estimate focal length from ~78 deg FOV
             this.loadSettings();
-            if (!this.focalLengthPx) {
-                this.focalLengthPx = this.procCanvas.width / (2 * Math.tan(78 / 2 * Math.PI / 180));
-            }
-
-            // Sync UI with saved marker separation
             const sepInput = document.getElementById('marker-separation');
             if (sepInput) sepInput.value = this.markerSeparationMM;
 
-            this.active = true;
-            this.distanceHistory = [];
-            this.processLoop();
-
-            document.getElementById('camera-status').textContent = 'Looking for markers\u2026';
+            this.mode = 'live';
+            this.frozen = false;
+            this.video.style.display = '';
+            this.canvas.style.cursor = 'default';
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            this.updateUI();
         } catch (err) {
             document.getElementById('camera-status').textContent = 'Camera access denied';
         }
     },
 
     stop() {
-        this.active = false;
-        if (this.timeoutId) { clearTimeout(this.timeoutId); this.timeoutId = null; }
         if (this.stream) {
             this.stream.getTracks().forEach(t => t.stop());
             this.stream = null;
         }
-        if (this.overlayCtx) {
-            this.overlayCtx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
+        this.mode = 'off';
+        this.frozen = false;
+        this.frozenImageData = null;
+        this.clickPoints = [];
+        this.video.style.display = '';
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        document.getElementById('camera-status').textContent = 'Camera off';
+    },
+
+    // Freeze the current video frame onto the canvas
+    captureFrame() {
+        const w = this.canvas.width;
+        const h = this.canvas.height;
+        // Draw mirrored so the display matches the live preview
+        this.ctx.save();
+        this.ctx.translate(w, 0);
+        this.ctx.scale(-1, 1);
+        this.ctx.drawImage(this.video, 0, 0, w, h);
+        this.ctx.restore();
+        // Save the clean frame for redrawing after marker annotations
+        this.frozenImageData = this.ctx.getImageData(0, 0, w, h);
+        this.video.style.display = 'none';
+        this.canvas.style.cursor = 'crosshair';
+        this.frozen = true;
+        this.clickPoints = [];
+    },
+
+    // Return to live video
+    unfreezeFrame() {
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        this.video.style.display = '';
+        this.canvas.style.cursor = 'default';
+        this.frozen = false;
+        this.frozenImageData = null;
+        this.clickPoints = [];
+    },
+
+    // Button: Capture
+    capture() {
+        if (this.mode === 'cal_live') {
+            this.captureFrame();
+            this.mode = 'cal_frozen';
+        } else if (this.mode === 'meas_live') {
+            this.captureFrame();
+            this.mode = 'meas_frozen';
         }
-        this.distanceHistory = [];
-        this.lastPixelSeparation = null;
+        this.updateUI();
     },
 
-    processLoop() {
-        if (!this.active) return;
-        this.processFrame();
-        this.timeoutId = setTimeout(() => this.processLoop(), 66); // ~15 fps
+    // Button: Calibrate
+    startCalibration() {
+        this.calStep = 0;
+        this.calData = [];
+        this.unfreezeFrame();
+        this.mode = 'cal_live';
+        this.updateUI();
     },
 
-    processFrame() {
-        if (!this.video || this.video.readyState < 2) return;
+    // Button: Measure
+    startMeasure() {
+        this.unfreezeFrame();
+        this.mode = 'meas_live';
+        this.updateUI();
+    },
 
-        const pw = this.procCanvas.width;
-        const ph = this.procCanvas.height;
+    // Canvas click — mark sticker positions
+    handleCanvasClick(e) {
+        if (!this.frozen || this.clickPoints.length >= 2) return;
 
-        // Draw video frame to processing canvas (downscaled)
-        this.procCtx.drawImage(this.video, 0, 0, pw, ph);
-        const imageData = this.procCtx.getImageData(0, 0, pw, ph);
-        const data = imageData.data;
+        const rect = this.canvas.getBoundingClientRect();
+        const x = (e.clientX - rect.left) * (this.canvas.width / rect.width);
+        const y = (e.clientY - rect.top) * (this.canvas.height / rect.height);
 
-        // Find green pixels
-        const greenPixels = [];
-        for (let i = 0; i < data.length; i += 4) {
-            const r = data[i], g = data[i + 1], b = data[i + 2];
-            if (this.isTargetColor(r, g, b)) {
-                const idx = i / 4;
-                greenPixels.push({ x: idx % pw, y: (idx / pw) | 0 });
+        this.clickPoints.push({ x, y });
+        this.drawMarkers();
+
+        if (this.clickPoints.length === 2) {
+            const pixSep = Math.hypot(
+                this.clickPoints[0].x - this.clickPoints[1].x,
+                this.clickPoints[0].y - this.clickPoints[1].y
+            );
+
+            if (this.mode === 'cal_frozen') {
+                // Record calibration data point
+                const dist = this.calDistances[this.calStep];
+                this.calData.push({ distanceCm: dist, pixelSep: pixSep });
+                this.calStep++;
+
+                if (this.calStep >= this.calDistances.length) {
+                    this.finishCalibration();
+                } else {
+                    // Move to next calibration distance after a pause
+                    setTimeout(() => {
+                        this.unfreezeFrame();
+                        this.mode = 'cal_live';
+                        this.updateUI();
+                    }, 1200);
+                }
+            } else if (this.mode === 'meas_frozen') {
+                if (!this.calibrationK) {
+                    document.getElementById('camera-status').textContent = 'Calibrate first!';
+                    return;
+                }
+                const distCm = Math.round(this.calibrationK / pixSep);
+                document.getElementById('camera-status').textContent =
+                    `Distance: ${distCm} cm  (${pixSep.toFixed(0)}px separation)`;
+
+                // Update the slider
+                const slider = document.getElementById('standard-distance-slider');
+                const clamped = Math.max(
+                    parseInt(slider.min),
+                    Math.min(parseInt(slider.max), distCm)
+                );
+                slider.value = clamped;
+                document.getElementById('standard-distance-value').textContent = clamped + ' cm';
+                renderStandardTestType(clamped);
             }
         }
+        this.updateUI();
+    },
 
-        // Draw overlay
-        const ctx = this.overlayCtx;
-        const ow = this.overlayCanvas.width;
-        const oh = this.overlayCanvas.height;
-        ctx.clearRect(0, 0, ow, oh);
-
-        if (greenPixels.length < 10) {
-            document.getElementById('camera-status').textContent = 'No markers detected';
-            return;
+    // Redraw the frozen frame + any marker annotations
+    drawMarkers() {
+        if (this.frozenImageData) {
+            this.ctx.putImageData(this.frozenImageData, 0, 0);
         }
+        const ctx = this.ctx;
 
-        // Cluster into two markers
-        const markers = this.clusterMarkers(greenPixels);
-        if (!markers) {
-            document.getElementById('camera-status').textContent = 'Need 2 markers visible';
-            return;
-        }
-
-        // Scale positions from processing canvas to overlay canvas
-        const sx = ow / pw;
-        const sy = oh / ph;
-
-        // Draw detected markers
-        ctx.fillStyle = 'rgba(255, 140, 0, 0.4)';
-        [markers.a, markers.b].forEach(m => {
+        this.clickPoints.forEach((p, i) => {
+            // Crosshair
+            ctx.strokeStyle = '#ff4444';
+            ctx.lineWidth = 2;
             ctx.beginPath();
-            ctx.arc(m.x * sx, m.y * sy, 14, 0, Math.PI * 2);
-            ctx.fill();
+            ctx.moveTo(p.x - 18, p.y); ctx.lineTo(p.x + 18, p.y);
+            ctx.moveTo(p.x, p.y - 18); ctx.lineTo(p.x, p.y + 18);
+            ctx.stroke();
+            // Circle
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 22, 0, Math.PI * 2);
+            ctx.stroke();
+            // Label
+            ctx.fillStyle = '#ff4444';
+            ctx.font = 'bold 16px Inter, sans-serif';
+            ctx.fillText(i === 0 ? 'A' : 'B', p.x + 26, p.y - 12);
         });
 
-        // Line between markers
-        ctx.strokeStyle = 'rgba(255, 140, 0, 0.7)';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([6, 4]);
-        ctx.beginPath();
-        ctx.moveTo(markers.a.x * sx, markers.a.y * sy);
-        ctx.lineTo(markers.b.x * sx, markers.b.y * sy);
-        ctx.stroke();
-        ctx.setLineDash([]);
+        // Dashed line + pixel distance label
+        if (this.clickPoints.length === 2) {
+            const a = this.clickPoints[0], b = this.clickPoints[1];
+            ctx.strokeStyle = 'rgba(255, 68, 68, 0.8)';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([8, 4]);
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y);
+            ctx.lineTo(b.x, b.y);
+            ctx.stroke();
+            ctx.setLineDash([]);
 
-        // Pixel distance between marker centroids
-        const pixelDist = Math.hypot(markers.a.x - markers.b.x, markers.a.y - markers.b.y);
-        this.lastPixelSeparation = pixelDist;
-
-        // Pinhole model: distance = (real_size * focal_length) / pixel_size
-        const distanceMM = (this.markerSeparationMM * this.focalLengthPx) / pixelDist;
-        const distanceCm = distanceMM / 10;
-
-        // Smooth the reading
-        this.distanceHistory.push(distanceCm);
-        if (this.distanceHistory.length > this.smoothingWindow) this.distanceHistory.shift();
-        const smoothed = this.distanceHistory.reduce((a, b) => a + b, 0) / this.distanceHistory.length;
-        const roundedCm = Math.round(smoothed);
-
-        // Update readout
-        document.getElementById('camera-status').textContent = `Distance: ${roundedCm} cm`;
-
-        // Drive the slider if value is within range
-        const slider = document.getElementById('standard-distance-slider');
-        const lo = parseInt(slider.min);
-        const hi = parseInt(slider.max);
-        const clamped = Math.max(lo, Math.min(hi, roundedCm));
-        if (parseInt(slider.value) !== clamped) {
-            slider.value = clamped;
-            document.getElementById('standard-distance-value').textContent = clamped + ' cm';
-            renderStandardTestType(clamped);
+            const pixSep = Math.hypot(a.x - b.x, a.y - b.y);
+            const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+            ctx.fillRect(mx - 45, my - 24, 90, 26);
+            ctx.fillStyle = '#ff4444';
+            ctx.font = 'bold 14px Inter, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(`${pixSep.toFixed(0)} px`, mx, my - 6);
+            ctx.textAlign = 'left';
         }
     },
 
-    // Split green pixels into two spatial clusters
-    clusterMarkers(pixels) {
-        pixels.sort((a, b) => a.x - b.x);
-
-        // Find the largest horizontal gap
-        let maxGap = 0, gapIdx = 0;
-        for (let i = 1; i < pixels.length; i++) {
-            const gap = pixels[i].x - pixels[i - 1].x;
-            if (gap > maxGap) { maxGap = gap; gapIdx = i; }
-        }
-
-        // Gap must be meaningful (>5% of frame width)
-        if (maxGap < this.procCanvas.width * 0.05) return null;
-
-        const groupA = pixels.slice(0, gapIdx);
-        const groupB = pixels.slice(gapIdx);
-        if (groupA.length < 5 || groupB.length < 5) return null;
-
-        const centroid = (arr) => ({
-            x: arr.reduce((s, p) => s + p.x, 0) / arr.length,
-            y: arr.reduce((s, p) => s + p.y, 0) / arr.length
-        });
-
-        return { a: centroid(groupA), b: centroid(groupB) };
-    },
-
-    // One-shot calibration: place markers at a known distance
-    calibrate(knownDistanceCm) {
-        if (!this.lastPixelSeparation || this.lastPixelSeparation < 1) return false;
-
-        // focal_length = pixel_separation * distance_mm / real_separation_mm
-        this.focalLengthPx = this.lastPixelSeparation * (knownDistanceCm * 10) / this.markerSeparationMM;
-        this.distanceHistory = [];
+    // Compute calibration constant from all ground-truth points
+    finishCalibration() {
+        // k = average(distanceCm * pixelSeparation) for all points
+        const kValues = this.calData.map(d => d.distanceCm * d.pixelSep);
+        this.calibrationK = kValues.reduce((a, b) => a + b, 0) / kValues.length;
         this.saveSettings();
-        return true;
+
+        // Show summary
+        const pairs = this.calData.map(d => `${d.distanceCm}cm=${d.pixelSep.toFixed(0)}px`).join(', ');
+        document.getElementById('camera-status').textContent =
+            `Calibrated! k=${this.calibrationK.toFixed(0)} (${pairs})`;
+        this.mode = 'live';
+
+        setTimeout(() => {
+            this.unfreezeFrame();
+            this.updateUI();
+        }, 2000);
     },
 
-    // Fast inline HSV-ish check for bright green
-    isTargetColor(r, g, b) {
-        const max = Math.max(r, g, b);
-        const min = Math.min(r, g, b);
-        const d = max - min;
+    // Update button visibility and status text based on current mode
+    updateUI() {
+        const status = document.getElementById('camera-status');
+        const captureBtn = document.getElementById('camera-capture-btn');
+        const calBtn = document.getElementById('camera-calibrate-btn');
+        const measBtn = document.getElementById('camera-measure-btn');
 
-        // Value check (brightness)
-        if (max < 77) return false; // ~30% of 255
+        captureBtn.style.display = 'none';
+        calBtn.style.display = 'none';
+        measBtn.style.display = 'none';
 
-        // Saturation check
-        if (max === 0 || d / max < 0.30) return false;
+        switch (this.mode) {
+            case 'live':
+                if (this.calibrationK) {
+                    status.textContent = `Calibrated (k=${this.calibrationK.toFixed(0)}). Measure or re-calibrate.`;
+                    measBtn.style.display = '';
+                    measBtn.textContent = 'Measure';
+                } else {
+                    status.textContent = 'Not calibrated. Click Calibrate to begin.';
+                }
+                calBtn.style.display = '';
+                calBtn.textContent = this.calibrationK ? 'Re-calibrate' : 'Calibrate';
+                break;
 
-        // Hue check — only compute if we passed sat/val
-        let h;
-        if (d === 0) return false;
-        if (max === r) h = 60 * (((g - b) / d) % 6);
-        else if (max === g) h = 60 * ((b - r) / d + 2);
-        else h = 60 * ((r - g) / d + 4);
-        if (h < 0) h += 360;
+            case 'cal_live':
+                status.textContent = `Calibration ${this.calStep + 1}/${this.calDistances.length}: ` +
+                    `Hold tablet at ${this.calDistances[this.calStep]} cm \u2192 Capture`;
+                captureBtn.style.display = '';
+                break;
 
-        return h >= this.hueMin && h <= this.hueMax;
+            case 'cal_frozen':
+                if (this.clickPoints.length === 0) {
+                    status.textContent = 'Click the FIRST orange sticker';
+                } else if (this.clickPoints.length === 1) {
+                    status.textContent = 'Click the SECOND orange sticker';
+                } else {
+                    const last = this.calData[this.calData.length - 1];
+                    if (last) {
+                        status.textContent = `Captured ${last.distanceCm} cm (${last.pixelSep.toFixed(0)}px). ` +
+                            (this.calStep < this.calDistances.length ? 'Next\u2026' : 'Finishing\u2026');
+                    }
+                }
+                break;
+
+            case 'meas_live':
+                status.textContent = 'Position tablet at desired distance \u2192 Capture';
+                captureBtn.style.display = '';
+                break;
+
+            case 'meas_frozen':
+                if (this.clickPoints.length === 0) {
+                    status.textContent = 'Click the FIRST orange sticker';
+                } else if (this.clickPoints.length === 1) {
+                    status.textContent = 'Click the SECOND orange sticker';
+                }
+                // After 2 clicks, status is set in handleCanvasClick
+                if (this.clickPoints.length === 2) {
+                    measBtn.style.display = '';
+                    measBtn.textContent = 'Remeasure';
+                    calBtn.style.display = '';
+                    calBtn.textContent = 'Re-calibrate';
+                }
+                break;
+        }
     },
 
     saveSettings() {
         localStorage.setItem('nearpoint_camera', JSON.stringify({
-            focalLengthPx: this.focalLengthPx,
+            calibrationK: this.calibrationK,
             markerSeparationMM: this.markerSeparationMM
         }));
     },
@@ -1366,7 +1433,7 @@ const distanceTracker = {
         const saved = localStorage.getItem('nearpoint_camera');
         if (saved) {
             const data = JSON.parse(saved);
-            if (data.focalLengthPx) this.focalLengthPx = data.focalLengthPx;
+            if (data.calibrationK) this.calibrationK = data.calibrationK;
             if (data.markerSeparationMM) this.markerSeparationMM = data.markerSeparationMM;
         }
     }
