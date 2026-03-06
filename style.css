@@ -192,25 +192,13 @@ h3 {
 }
 
 .logo-light {
-    /* White logo with true alpha transparency (no blend-mode stacking issues).
-       brightness(0)+invert(1) makes all pixels white; the dual-mask XOR inverts
-       the luminance mask so the black logo shape = opaque, white bg = transparent. */
-    filter: brightness(0) invert(1);
-    -webkit-mask-image: url(logo.png), linear-gradient(white, white);
-    mask-image: url(logo.png), linear-gradient(white, white);
-    -webkit-mask-size: contain, cover;
-    mask-size: contain, cover;
-    -webkit-mask-repeat: no-repeat, no-repeat;
-    mask-repeat: no-repeat, no-repeat;
-    -webkit-mask-position: center, center;
-    mask-position: center, center;
-    -webkit-mask-composite: xor;
-    mask-composite: exclude;
+    filter: invert(1);
+    mix-blend-mode: screen;
 }
 
 .hero-logo {
-    height: 56px;
-    margin-bottom: 16px;
+    height: 120px;
+    margin-bottom: 24px;
 }
 
 .nav-logo {
@@ -380,7 +368,7 @@ h3 {
 }
 
 .calibration-hero .logo {
-    height: 100px;
+    height: 120px;
     margin: 0 auto 24px;
 }
 
