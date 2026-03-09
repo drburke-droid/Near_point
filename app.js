@@ -560,7 +560,8 @@ let state = {
     displayScaling: 150,
     workingDistance: 60, // cm
     distanceUnit: 'cm',
-    occupation: 'general'
+    occupation: 'general',
+    zoomFactor: 1.0
 };
 
 // --- Font Metrics Cache ---
@@ -814,7 +815,7 @@ function getPhysicalEmSize(fontSize, fontUnit, monitorPPI, scalingPercent) {
 
 // Convert a physical mm measurement to CSS px on this tablet
 function mmToCSS(mm) {
-    return mm * state.cssPixelsPerMm;
+    return mm * state.cssPixelsPerMm * state.zoomFactor;
 }
 
 // Measure x-height ratio for a font using canvas
@@ -863,9 +864,56 @@ function setupTestScreen() {
     // Distance slider for standard test
     $('#standard-distance-slider').addEventListener('input', () => {
         const d = parseInt($('#standard-distance-slider').value);
-        $('#standard-distance-value').textContent = d + ' cm';
-        renderStandardTestType(d);
+        const unit = $('#standard-distance-unit').dataset.unit;
+        $('#standard-distance-value').textContent = d;
+        const distCm = unit === 'in' ? d * 2.54 : d;
+        renderStandardTestType(distCm);
     });
+
+    // Unit toggle on standard test distance slider
+    $('#standard-distance-unit').addEventListener('click', () => {
+        const toggle = $('#standard-distance-unit');
+        const slider = $('#standard-distance-slider');
+        const currentUnit = toggle.dataset.unit;
+        const val = parseInt(slider.value);
+
+        if (currentUnit === 'cm') {
+            toggle.dataset.unit = 'in';
+            toggle.textContent = 'in';
+            slider.min = 12;
+            slider.max = 35;
+            slider.value = Math.round(val / 2.54);
+        } else {
+            toggle.dataset.unit = 'cm';
+            toggle.textContent = 'cm';
+            slider.min = 30;
+            slider.max = 90;
+            slider.value = Math.round(val * 2.54);
+        }
+        const newVal = parseInt(slider.value);
+        $('#standard-distance-value').textContent = newVal;
+        const distCm = toggle.dataset.unit === 'in' ? newVal * 2.54 : newVal;
+        renderStandardTestType(distCm);
+    });
+
+    // Zoom +/- buttons for fine-tuning calibration
+    function applyZoom(delta) {
+        state.zoomFactor = Math.round((state.zoomFactor + delta) * 100) / 100;
+        state.zoomFactor = Math.max(0.80, Math.min(1.20, state.zoomFactor));
+        $('#zoom-value').textContent = Math.round(state.zoomFactor * 100) + '%';
+        localStorage.setItem('nearpoint_zoom', state.zoomFactor);
+        renderTest();
+    }
+
+    $('#zoom-in-btn').addEventListener('click', () => applyZoom(0.02));
+    $('#zoom-out-btn').addEventListener('click', () => applyZoom(-0.02));
+
+    // Restore saved zoom
+    const savedZoom = parseFloat(localStorage.getItem('nearpoint_zoom'));
+    if (savedZoom && savedZoom >= 0.80 && savedZoom <= 1.20) {
+        state.zoomFactor = savedZoom;
+        $('#zoom-value').textContent = Math.round(savedZoom * 100) + '%';
+    }
 
     // Occupation picker in test header
     $('#test-occupation-picker').addEventListener('change', () => {
@@ -943,9 +991,27 @@ function renderTest() {
     updateTestInfoBar();
     // Sync occupation picker with form selection
     $('#test-occupation-picker').value = state.occupation;
-    const sliderDist = parseInt($('#standard-distance-slider').value) || 40;
-    $('#standard-distance-value').textContent = sliderDist + ' cm';
-    renderStandardTestType(sliderDist);
+    // Sync unit toggle with input screen preference
+    const unit = state.distanceUnit;
+    const toggle = $('#standard-distance-unit');
+    const slider = $('#standard-distance-slider');
+    if (unit === 'in') {
+        toggle.dataset.unit = 'in';
+        toggle.textContent = 'in';
+        slider.min = 12;
+        slider.max = 35;
+        slider.value = Math.round(40 / 2.54); // default 40cm in inches
+    } else {
+        toggle.dataset.unit = 'cm';
+        toggle.textContent = 'cm';
+        slider.min = 30;
+        slider.max = 90;
+        slider.value = 40;
+    }
+    const sliderVal = parseInt(slider.value);
+    $('#standard-distance-value').textContent = sliderVal;
+    const sliderDistCm = unit === 'in' ? sliderVal * 2.54 : sliderVal;
+    renderStandardTestType(sliderDistCm);
     renderOccupationSamples();
     renderDocumentSamples();
 }
@@ -955,8 +1021,10 @@ function updateTestInfoBar() {
     const vergence = (100 / distCm).toFixed(2);
     const ppi = getMonitorPPI(state.monitorSize, state.monitorResolution);
 
-    $('#test-distance-info').textContent =
-        `Distance: ${distCm.toFixed(0)} cm (${(distCm / 2.54).toFixed(1)}")`;
+    const distDisplay = state.distanceUnit === 'in'
+        ? `Distance: ${(distCm / 2.54).toFixed(1)}" (${distCm.toFixed(0)} cm)`
+        : `Distance: ${distCm.toFixed(0)} cm (${(distCm / 2.54).toFixed(1)}")`;
+    $('#test-distance-info').textContent = distDisplay;
     $('#test-monitor-info').textContent =
         `Monitor: ${state.monitorSize}" ${state.monitorResolution} @ ${state.displayScaling}% (${ppi.toFixed(0)} PPI)`;
     $('#test-vergence-info').textContent =

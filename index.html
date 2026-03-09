@@ -187,6 +187,11 @@
                 <button class="tab" data-tab="documents">Documents</button>
                 <div class="tab-indicator"></div>
             </div>
+            <div class="zoom-controls">
+                <button id="zoom-out-btn" class="btn-zoom" title="Zoom out (shrink text)">−</button>
+                <span id="zoom-value">100%</span>
+                <button id="zoom-in-btn" class="btn-zoom" title="Zoom in (enlarge text)">+</button>
+            </div>
             <button id="back-btn" class="btn btn-ghost btn-small btn-nav">Back</button>
         </nav>
 
@@ -221,7 +226,8 @@
             <div class="standard-distance-bar">
                 <label for="standard-distance-slider">Testing Distance</label>
                 <input type="range" id="standard-distance-slider" min="30" max="90" value="40" step="1">
-                <span id="standard-distance-value">40 cm</span>
+                <span id="standard-distance-value">40</span>
+                <span class="unit-toggle unit-toggle-dark" id="standard-distance-unit" data-unit="cm">cm</span>
                 <button id="quick-measure-btn" class="btn-camera" title="Measure distance" style="display:none">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l20 20M5.5 5.5l2-2M9.5 9.5l2-2M13.5 13.5l2-2M17.5 17.5l2-2"/></svg>
                     Measure

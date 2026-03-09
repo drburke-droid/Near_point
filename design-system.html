@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Design System — Floating Cards over Hero</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+/* ==========================================
+   DESIGN SYSTEM — Floating Cards + Mac Windows
+   ==========================================
+   Drop this file into any project along with the
+   background image (windows-11-bloom-5120x2880-14423.jpg).
+
+   Two visual patterns:
+     1. HERO + FLOATING CARDS — dark gradient banner with
+        white elevated cards that overlap into the hero
+        via negative top-margin.
+     2. MAC-STYLE WINDOWS — panels with a titlebar (traffic-
+        light dots), floating over a full-bleed wallpaper.
+
+   All colors, spacing, and motion are defined as CSS
+   custom properties so you can re-theme in one place.
+   ========================================== */
+
+/* --- Reset --- */
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+/* --- Design Tokens --- */
+:root {
+    /* Core palette — navy / slate */
+    --navy-900: #0a1628;
+    --navy-800: #0f2240;
+    --navy-700: #142e54;
+    --navy-600: #1a3a68;
+    --navy-500: #24508a;
+    --navy-400: #3a7bd5;
+    --navy-300: #6ba3eb;
+    --navy-200: #a8ccf5;
+    --navy-100: #dbe9fc;
+    --navy-50:  #f0f5ff;
+
+    --cyan-500: #00b8d4;
+    --cyan-400: #26c6da;
+
+    --emerald-500: #10b981;
+
+    --slate-900: #0f172a;
+    --slate-800: #1e293b;
+    --slate-700: #334155;
+    --slate-600: #475569;
+    --slate-500: #64748b;
+    --slate-400: #94a3b8;
+    --slate-300: #cbd5e1;
+    --slate-200: #e2e8f0;
+    --slate-100: #f1f5f9;
+    --slate-50:  #f8fafc;
+    --white:     #ffffff;
+
+    /* Semantic */
+    --bg:             var(--slate-50);
+    --surface:        var(--white);
+    --text:           var(--slate-800);
+    --text-secondary: var(--slate-500);
+    --border:         var(--slate-200);
+
+    /* Gradients */
+    --gradient-hero:   linear-gradient(135deg, var(--navy-900) 0%, var(--navy-700) 50%, #1a3a5c 100%);
+    --gradient-accent: linear-gradient(135deg, var(--navy-400) 0%, var(--cyan-500) 100%);
+    --gradient-glow:   linear-gradient(135deg, var(--navy-500) 0%, var(--cyan-500) 100%);
+
+    /* Elevation */
+    --shadow-sm: 0 1px 2px rgba(15,23,42,0.04);
+    --shadow-md: 0 4px 12px rgba(15,23,42,0.06), 0 1px 3px rgba(15,23,42,0.04);
+    --shadow-lg: 0 12px 40px rgba(15,23,42,0.08), 0 4px 12px rgba(15,23,42,0.04);
+    --shadow-xl: 0 24px 64px rgba(15,23,42,0.12), 0 8px 24px rgba(15,23,42,0.06);
+
+    /* Shape */
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 16px;
+    --radius-xl: 24px;
+
+    /* Motion */
+    --ease-out:      cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-spring:   cubic-bezier(0.34, 1.56, 0.64, 1);
+    --duration-fast:   150ms;
+    --duration-normal: 250ms;
+    --duration-slow:   400ms;
+}
+
+/* --- Base --- */
+html {
+    font-size: 16px;
+    scroll-behavior: smooth;
+}
+
+body {
+    font-family: 'Inter', -apple-system, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* --- Animations --- */
+@keyframes fadeSlideUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+@keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 20px rgba(58,123,213,0.2); }
+    50%      { box-shadow: 0 0 36px rgba(58,123,213,0.4); }
+}
+
+.animate-in {
+    animation: fadeSlideUp 0.5s var(--ease-out) both;
+}
+
+/* ==========================================
+   PATTERN 1 — HERO BANNER + FLOATING CARDS
+   ==========================================
+   Structure:
+     <section class="hero-section">
+       <div class="hero-banner">
+         <div class="hero-banner-bg"></div>
+         <div class="hero-banner-content container">
+           <h1>…</h1>
+           <p class="subtitle">…</p>
+         </div>
+       </div>
+       <div class="container card-container">
+         <div class="card card-elevated animate-in">…</div>
+       </div>
+     </section>
+
+   The card-container has a negative top-margin that
+   pulls the cards up so they overlap the hero.         */
+
+.container {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 0 24px;
+}
+
+/* --- Hero banner --- */
+.hero-banner {
+    position: relative;
+    overflow: hidden;
+}
+
+.hero-banner-bg {
+    position: absolute;
+    inset: 0;
+    background: var(--gradient-hero);
+}
+
+/* Subtle radial highlight in the upper-right */
+.hero-banner-bg::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(
+        ellipse at 70% 20%,
+        rgba(58,123,213,0.15) 0%,
+        transparent 60%
+    );
+}
+
+.hero-banner-content {
+    position: relative;
+    text-align: center;
+    padding: 48px 24px 56px;
+    color: white;
+}
+
+.hero-banner-content h1 {
+    color: white;
+    font-size: 2.25rem;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    margin-bottom: 8px;
+}
+
+.hero-banner-content .subtitle {
+    color: rgba(255,255,255,0.65);
+    font-size: 0.95rem;
+    max-width: 500px;
+    margin: 0 auto;
+}
+
+/* --- Floating card container --- */
+.card-container {
+    margin-top: -32px;      /* pulls cards up into the hero */
+    position: relative;
+    z-index: 1;
+    padding-bottom: 48px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+/* --- Cards --- */
+.card {
+    background: var(--surface);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border);
+    padding: 28px;
+}
+
+.card-elevated {
+    box-shadow: var(--shadow-md);
+    border-color: transparent;
+}
+
+.card-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.card-icon {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    background: var(--navy-50);
+    color: var(--navy-500);
+    flex-shrink: 0;
+}
+
+.card-desc {
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    margin-bottom: 16px;
+}
+
+/* ==========================================
+   PATTERN 2 — MAC-STYLE WINDOWS OVER WALLPAPER
+   ==========================================
+   Structure:
+     <section class="wallpaper-section">
+       <div class="mac-window animate-in">
+         <div class="mac-titlebar">
+           <div class="titlebar-dots">
+             <span></span><span></span><span></span>
+           </div>
+           <span class="titlebar-title">Window Title</span>
+         </div>
+         <div class="mac-body">…content…</div>
+         <div class="mac-footer">…metadata…</div>
+       </div>
+     </section>
+
+   The section uses the bloom wallpaper as a fixed
+   background. Windows float on top with elevation.   */
+
+.wallpaper-section {
+    background: url('windows-11-bloom-5120x2880-14423.jpg') center / cover no-repeat fixed;
+    min-height: 100vh;
+    padding: 48px 24px;
+}
+
+.wallpaper-section .container {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+}
+
+/* --- Mac window --- */
+.mac-window {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    box-shadow: var(--shadow-lg);
+    transition: box-shadow var(--duration-normal) var(--ease-out);
+}
+
+.mac-window:hover {
+    box-shadow: var(--shadow-xl);
+}
+
+.mac-titlebar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    background: var(--slate-100);
+    border-bottom: 1px solid var(--border);
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.titlebar-dots {
+    display: flex;
+    gap: 6px;
+}
+
+.titlebar-dots span {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+}
+
+.titlebar-dots span:nth-child(1) { background: #ff5f57; }
+.titlebar-dots span:nth-child(2) { background: #ffbd2e; }
+.titlebar-dots span:nth-child(3) { background: #27c93f; }
+
+.titlebar-title {
+    flex: 1;
+}
+
+.mac-body {
+    padding: 20px;
+    background: var(--white);
+}
+
+.mac-body.dark {
+    background: #1e1e1e;
+    color: #d4d4d4;
+}
+
+.mac-footer {
+    padding: 8px 16px;
+    background: var(--slate-50);
+    border-top: 1px solid var(--border);
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    display: flex;
+    gap: 20px;
+    font-weight: 500;
+}
+
+.mac-footer strong {
+    color: var(--text);
+    font-weight: 600;
+}
+
+/* ==========================================
+   PATTERN 3 — FROSTED-GLASS TOOLBAR
+   ==========================================
+   A sticky bar with blur backdrop, used for controls
+   that sit between the nav and the wallpaper content.  */
+
+.frosted-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding: 12px 24px;
+    background: rgba(15,23,42,0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    color: rgba(255,255,255,0.9);
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+/* ==========================================
+   SHARED COMPONENTS
+   ========================================== */
+
+/* --- Buttons --- */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px 24px;
+    border: 1.5px solid transparent;
+    border-radius: var(--radius-sm);
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--duration-normal) var(--ease-out);
+    font-family: inherit;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+}
+
+.btn-primary {
+    background: var(--gradient-glow);
+    color: white;
+    border: none;
+    box-shadow: var(--shadow-sm);
+}
+
+.btn-primary:hover {
+    box-shadow: var(--shadow-md), 0 0 20px rgba(58,123,213,0.25);
+    transform: translateY(-1px);
+}
+
+.btn-primary:active {
+    transform: translateY(0);
+    box-shadow: var(--shadow-sm);
+}
+
+.btn-glow {
+    animation: pulse-glow 3s ease-in-out infinite;
+}
+
+.btn-glow:hover {
+    animation: none;
+}
+
+.btn-ghost {
+    background: transparent;
+    color: var(--text-secondary);
+    border-color: var(--border);
+}
+
+.btn-ghost:hover {
+    background: var(--slate-100);
+    color: var(--text);
+    border-color: var(--slate-300);
+}
+
+.btn-large {
+    padding: 14px 48px;
+    font-size: 1rem;
+    border-radius: var(--radius-md);
+}
+
+/* --- Info chips --- */
+.info-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 100px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+/* --- Form elements --- */
+.form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    padding: 36px;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.form-group.full-width {
+    grid-column: 1 / -1;
+}
+
+.form-group label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.form-group select,
+.form-group input {
+    padding: 11px 14px;
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 0.925rem;
+    font-family: inherit;
+    background: var(--white);
+    color: var(--text);
+    transition: all var(--duration-normal) var(--ease-out);
+    font-weight: 500;
+}
+
+.form-group select:focus,
+.form-group input:focus {
+    outline: none;
+    border-color: var(--navy-400);
+    box-shadow: 0 0 0 3px rgba(58,123,213,0.1);
+}
+
+/* --- Responsive --- */
+@media (max-width: 700px) {
+    .form-grid {
+        grid-template-columns: 1fr;
+    }
+    .hero-banner-content h1 {
+        font-size: 1.6rem;
+    }
+}
+    </style>
+</head>
+<body>
+
+<!-- ===================================================
+     DEMO 1 — HERO BANNER WITH FLOATING CARDS
+     =================================================== -->
+
+<section class="hero-section">
+    <div class="hero-banner">
+        <div class="hero-banner-bg"></div>
+        <div class="hero-banner-content container">
+            <h1>Hero With Floating Cards</h1>
+            <p class="subtitle">The cards below overlap into the hero via negative margin, creating a layered depth effect.</p>
+        </div>
+    </div>
+    <div class="container card-container">
+
+        <div class="card card-elevated animate-in">
+            <div class="card-header">
+                <div class="card-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
+                </div>
+                <h2>Elevated Card</h2>
+            </div>
+            <p class="card-desc">Cards use a white background, large border-radius, and a subtle shadow to float above the page.</p>
+            <button class="btn btn-primary btn-glow btn-large">Primary Action</button>
+        </div>
+
+        <div class="card card-elevated animate-in" style="animation-delay: 0.1s">
+            <div class="card-header">
+                <div class="card-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+                </div>
+                <h2>Form Card</h2>
+            </div>
+            <p class="card-desc">Cards can contain forms with the same floating aesthetic.</p>
+            <div class="form-grid" style="padding: 0">
+                <div class="form-group">
+                    <label for="demo-select">Option</label>
+                    <select id="demo-select">
+                        <option>Choice A</option>
+                        <option>Choice B</option>
+                        <option>Choice C</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="demo-input">Value</label>
+                    <input type="text" id="demo-input" placeholder="Type here…">
+                </div>
+                <div class="form-group full-width" style="flex-direction: row; gap: 16px; align-items: center; margin-top: 8px;">
+                    <button class="btn btn-primary">Submit</button>
+                    <button class="btn btn-ghost">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</section>
+
+<!-- ===================================================
+     DEMO 2 — MAC-STYLE WINDOWS OVER WALLPAPER
+     =================================================== -->
+
+<section class="wallpaper-section">
+    <div class="container">
+
+        <div class="mac-window animate-in">
+            <div class="mac-titlebar">
+                <div class="titlebar-dots">
+                    <span></span><span></span><span></span>
+                </div>
+                <span class="titlebar-title">Document — Light</span>
+            </div>
+            <div class="mac-body">
+                <p style="font-family: Georgia, serif; font-size: 1rem; line-height: 1.7; color: var(--slate-900);">
+                    The morning light filtered through the curtains as she reached for the
+                    worn leather journal on the nightstand. Its pages, yellowed with age,
+                    held the stories of three generations — tales of quiet courage, unexpected
+                    love, and the ordinary moments that somehow became extraordinary in the
+                    retelling.
+                </p>
+            </div>
+            <div class="mac-footer">
+                <span><strong>Font:</strong> Georgia 16px</span>
+                <span><strong>Theme:</strong> Light</span>
+            </div>
+        </div>
+
+        <div class="mac-window animate-in" style="animation-delay: 0.15s">
+            <div class="mac-titlebar">
+                <div class="titlebar-dots">
+                    <span></span><span></span><span></span>
+                </div>
+                <span class="titlebar-title">Editor — Dark</span>
+            </div>
+            <div class="mac-body dark">
+                <pre style="font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 0.9rem; line-height: 1.6; margin: 0;"><span style="color:#569cd6">function</span> <span style="color:#dcdcaa">greet</span>(<span style="color:#9cdcfe">name</span>) {
+    <span style="color:#c586c0">return</span> <span style="color:#ce9178">`Hello, </span><span style="color:#569cd6">${</span><span style="color:#9cdcfe">name</span><span style="color:#569cd6">}</span><span style="color:#ce9178">!`</span>;
+}</pre>
+            </div>
+            <div class="mac-footer">
+                <span><strong>Language:</strong> JavaScript</span>
+                <span><strong>Theme:</strong> Dark</span>
+            </div>
+        </div>
+
+        <div class="mac-window animate-in" style="animation-delay: 0.3s">
+            <div class="mac-titlebar">
+                <div class="titlebar-dots">
+                    <span></span><span></span><span></span>
+                </div>
+                <span class="titlebar-title">Data Table</span>
+            </div>
+            <div class="mac-body" style="padding: 0;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 0.875rem;">
+                    <thead>
+                        <tr style="background: var(--slate-50);">
+                            <th style="text-align: left; padding: 10px 16px; border-bottom: 2px solid var(--slate-200); font-weight: 600;">Name</th>
+                            <th style="text-align: left; padding: 10px 16px; border-bottom: 2px solid var(--slate-200); font-weight: 600;">Role</th>
+                            <th style="text-align: right; padding: 10px 16px; border-bottom: 2px solid var(--slate-200); font-weight: 600;">Score</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td style="padding: 8px 16px; border-bottom: 1px solid var(--slate-100);">Alice</td><td style="padding: 8px 16px; border-bottom: 1px solid var(--slate-100);">Engineer</td><td style="padding: 8px 16px; border-bottom: 1px solid var(--slate-100); text-align: right;">98</td></tr>
+                        <tr><td style="padding: 8px 16px; border-bottom: 1px solid var(--slate-100);">Bob</td><td style="padding: 8px 16px; border-bottom: 1px solid var(--slate-100);">Designer</td><td style="padding: 8px 16px; border-bottom: 1px solid var(--slate-100); text-align: right;">94</td></tr>
+                        <tr><td style="padding: 8px 16px;">Carol</td><td style="padding: 8px 16px;">Manager</td><td style="padding: 8px 16px; text-align: right;">91</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="mac-footer">
+                <span><strong>Rows:</strong> 3</span>
+            </div>
+        </div>
+
+    </div>
+</section>
+
+<!-- ===================================================
+     DEMO 3 — FROSTED TOOLBAR + ANOTHER HERO
+     =================================================== -->
+
+<section class="hero-section">
+    <div class="hero-banner">
+        <div class="hero-banner-bg"></div>
+        <div class="hero-banner-content container">
+            <h1>Mix and Match</h1>
+            <p class="subtitle">Combine the hero, floating cards, frosted toolbars, and mac windows freely.</p>
+        </div>
+    </div>
+    <div class="container card-container">
+        <div class="card card-elevated animate-in">
+            <h2 style="margin-bottom: 12px;">How to use</h2>
+            <ol style="padding-left: 20px; color: var(--text-secondary); font-size: 0.9rem; line-height: 2;">
+                <li>Copy this file and <code>windows-11-bloom-5120x2880-14423.jpg</code> into your project.</li>
+                <li>Extract the <code>&lt;style&gt;</code> block into your own stylesheet.</li>
+                <li>Customize the <code>:root</code> CSS variables to re-theme.</li>
+                <li>Use the HTML patterns shown in the demos above.</li>
+            </ol>
+        </div>
+    </div>
+</section>
+
+</body>
+</html>
