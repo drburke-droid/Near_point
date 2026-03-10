@@ -10,6 +10,10 @@ const M_SIZES = [0.50, 0.75, 1.00, 1.25];
 const DEFAULT_CSS_PX_PER_MM = 96 / 25.4; // ~3.78, CSS spec: 1in = 96px
 const PT_TO_MM = 25.4 / 72; // 1pt = 0.3528mm
 
+// --- Snellen Distance Acuity ---
+const SLOAN_LETTERS = ['C', 'D', 'E', 'F', 'L', 'N', 'O', 'P', 'T', 'Z'];
+const SNELLEN_LEVELS = [200, 100, 70, 50, 40, 30, 25, 20, 15, 10];
+
 // --- Document Types (fixed physical sizes) ---
 const DOCUMENTS = [
     {
@@ -564,6 +568,10 @@ let state = {
     zoomFactor: 1.0
 };
 
+// --- Distance Tab State ---
+let distanceSnellenIndex = 4; // index into SNELLEN_LEVELS, starts at 20/40
+let distanceLetters = [];
+
 // --- Font Metrics Cache ---
 const fontXHeightRatios = {};
 
@@ -858,6 +866,14 @@ function setupTestScreen() {
             target.style.animation = 'none';
             target.offsetHeight; // force reflow
             target.style.animation = '';
+
+            // Show/hide distance bottom panel
+            const bottomPanel = $('#snellen-bottom-panel');
+            if (tab.dataset.tab === 'distance') {
+                bottomPanel.classList.remove('hidden');
+            } else {
+                bottomPanel.classList.add('hidden');
+            }
         });
     });
 
@@ -983,6 +999,63 @@ function setupTestScreen() {
         }
     });
 
+    // --- Distance acuity tab ---
+    $('#distance-test-slider').addEventListener('input', () => {
+        const val = parseFloat($('#distance-test-slider').value);
+        const unit = $('#distance-test-unit').dataset.unit;
+        $('#distance-test-value').textContent = unit === 'ft' ? val.toFixed(1) : val.toFixed(1);
+        renderDistanceTest();
+    });
+
+    $('#distance-test-unit').addEventListener('click', () => {
+        const toggle = $('#distance-test-unit');
+        const slider = $('#distance-test-slider');
+        const val = parseFloat(slider.value);
+
+        if (toggle.dataset.unit === 'ft') {
+            // Switch to metres
+            toggle.dataset.unit = 'm';
+            toggle.textContent = 'm';
+            slider.min = 1.5;
+            slider.max = 12;
+            slider.step = 0.1;
+            slider.value = (val * 0.3048).toFixed(1);
+        } else {
+            // Switch to feet
+            toggle.dataset.unit = 'ft';
+            toggle.textContent = 'ft';
+            slider.min = 5;
+            slider.max = 40;
+            slider.step = 0.5;
+            slider.value = (val / 0.3048).toFixed(1);
+        }
+        $('#distance-test-value').textContent = parseFloat(slider.value).toFixed(1);
+        renderDistanceTest();
+    });
+
+    $('#mirror-checkbox').addEventListener('change', () => renderDistanceTest());
+
+    $('#snellen-refresh-btn').addEventListener('click', () => {
+        distanceLetters = pickSnellenLetters();
+        renderDistanceTest();
+    });
+
+    $('#snellen-up-btn').addEventListener('click', () => {
+        if (distanceSnellenIndex > 0) {
+            distanceSnellenIndex--;
+            distanceLetters = pickSnellenLetters();
+            renderDistanceTest();
+        }
+    });
+
+    $('#snellen-down-btn').addEventListener('click', () => {
+        if (distanceSnellenIndex < SNELLEN_LEVELS.length - 1) {
+            distanceSnellenIndex++;
+            distanceLetters = pickSnellenLetters();
+            renderDistanceTest();
+        }
+    });
+
     // Back button
     $('#back-btn').addEventListener('click', () => showScreen('input'));
 }
@@ -1014,6 +1087,7 @@ function renderTest() {
     renderStandardTestType(sliderDistCm);
     renderOccupationSamples();
     renderDocumentSamples();
+    renderDistanceTest();
 }
 
 function updateTestInfoBar() {
@@ -1436,6 +1510,82 @@ function renderDocumentSamples() {
         sample.appendChild(content);
         sample.appendChild(meta);
         container.appendChild(sample);
+    });
+}
+
+// ==========================================
+// DISTANCE ACUITY TEST
+// ==========================================
+
+function getCapHeightRatio(fontFamily) {
+    const key = fontFamily + '__cap';
+    if (fontXHeightRatios[key]) return fontXHeightRatios[key];
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const testSize = 200;
+    ctx.font = `${testSize}px ${fontFamily}`;
+    const metrics = ctx.measureText('H');
+    if (metrics.actualBoundingBoxAscent) {
+        const ratio = metrics.actualBoundingBoxAscent / testSize;
+        fontXHeightRatios[key] = ratio;
+        return ratio;
+    }
+    fontXHeightRatios[key] = 0.72;
+    return 0.72;
+}
+
+function pickSnellenLetters() {
+    const letters = [];
+    for (let i = 0; i < 5; i++) {
+        letters.push(SLOAN_LETTERS[Math.floor(Math.random() * SLOAN_LETTERS.length)]);
+    }
+    return letters;
+}
+
+function renderDistanceTest() {
+    const container = $('#snellen-letters');
+    if (!container) return;
+
+    const unit = $('#distance-test-unit').dataset.unit;
+    const sliderVal = parseFloat($('#distance-test-slider').value);
+    const mirror = $('#mirror-checkbox').checked;
+
+    // Convert distance to mm
+    const distMM = unit === 'ft' ? sliderVal * 304.8 : sliderVal * 1000;
+
+    const snellenDenom = SNELLEN_LEVELS[distanceSnellenIndex];
+
+    // Letter height: subtends 5 * (denom/20) arcminutes at testing distance
+    const arcminTotal = 5 * snellenDenom / 20;
+    const radians = arcminTotal * Math.PI / (180 * 60);
+    const letterHeightMM = distMM * Math.tan(radians);
+
+    // Convert physical cap-height to CSS font-size
+    const optFont = '"Arial", "Helvetica", sans-serif';
+    const capRatio = getCapHeightRatio(optFont);
+    const emSizeMM = letterHeightMM / capRatio;
+    const cssFontSize = mmToCSS(emSizeMM);
+
+    // Update indicator
+    $('#snellen-indicator').textContent = `20/${snellenDenom}`;
+
+    // Pick letters if empty
+    if (distanceLetters.length === 0) {
+        distanceLetters = pickSnellenLetters();
+    }
+
+    // Render
+    container.innerHTML = '';
+    container.style.fontSize = cssFontSize + 'px';
+    container.style.fontFamily = optFont;
+    container.style.transform = mirror ? 'scaleX(-1)' : 'none';
+
+    distanceLetters.forEach(letter => {
+        const span = document.createElement('span');
+        span.className = 'snellen-letter';
+        span.textContent = letter;
+        container.appendChild(span);
     });
 }
 

@@ -185,6 +185,7 @@
                 <button class="tab active" data-tab="standard">Standard Test Type</button>
                 <button class="tab" data-tab="occupation">Occupation</button>
                 <button class="tab" data-tab="documents">Documents</button>
+                <button class="tab" data-tab="distance">Distance</button>
                 <div class="tab-indicator"></div>
             </div>
             <div class="zoom-controls">
@@ -272,6 +273,37 @@
 
         <div id="documents-tab" class="tab-content hidden">
             <div id="documents-test-container"></div>
+        </div>
+
+        <div id="distance-tab" class="tab-content hidden">
+            <div class="distance-test-bar">
+                <label for="distance-test-slider">Testing Distance</label>
+                <input type="range" id="distance-test-slider" min="5" max="40" value="20" step="0.5">
+                <span id="distance-test-value">20.0</span>
+                <span class="unit-toggle unit-toggle-dark" id="distance-test-unit" data-unit="ft">ft</span>
+                <label class="mirror-toggle-label">
+                    <input type="checkbox" id="mirror-checkbox">
+                    <span class="mirror-toggle-switch"></span>
+                    <span class="mirror-toggle-text">Mirror</span>
+                </label>
+            </div>
+            <div class="distance-test-display">
+                <div class="snellen-letters" id="snellen-letters"></div>
+            </div>
+            <div class="snellen-bottom-panel hidden" id="snellen-bottom-panel">
+                <div class="snellen-indicator" id="snellen-indicator">20/40</div>
+                <div class="snellen-controls">
+                    <button id="snellen-up-btn" class="btn-snellen" title="Larger letters (easier)">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 15l-6-6-6 6"/></svg>
+                    </button>
+                    <button id="snellen-refresh-btn" class="btn-snellen btn-snellen-accent" title="New letters">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                    </button>
+                    <button id="snellen-down-btn" class="btn-snellen" title="Smaller letters (harder)">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+                    </button>
+                </div>
+            </div>
         </div>
     </div>
 
