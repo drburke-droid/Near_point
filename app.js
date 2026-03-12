@@ -14,6 +14,13 @@ const PT_TO_MM = 25.4 / 72; // 1pt = 0.3528mm
 const SLOAN_LETTERS = ['C', 'D', 'E', 'F', 'L', 'N', 'O', 'P', 'T', 'Z'];
 const SNELLEN_LEVELS = [200, 100, 70, 50, 40, 30, 25, 20, 15, 10];
 
+// --- Bailey-Lovie Chart ---
+const BAILEY_LOVIE_LETTERS = ['D', 'E', 'F', 'H', 'N', 'P', 'R', 'U', 'V', 'Z'];
+// LogMAR levels from 1.0 (20/200) down to -0.3 (20/10), step 0.1
+const LOGMAR_LEVELS = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0, -0.1, -0.2, -0.3];
+// Preset contrast levels (Weber %) for low-contrast testing
+const CONTRAST_LEVELS = [100, 25, 10, 5, 2.5, 1.25];
+
 // --- Document Types (fixed physical sizes) ---
 const DOCUMENTS = [
     {
@@ -571,6 +578,10 @@ let state = {
 // --- Distance Tab State ---
 let distanceSnellenIndex = 4; // index into SNELLEN_LEVELS, starts at 20/40
 let distanceLetters = [];
+let baileyLovieMode = false;
+let blLogmarIndex = 7; // index into LOGMAR_LEVELS, starts at LogMAR 0.3 (≈20/40)
+let blLetters = [];
+let contrastPercent = 100; // Weber contrast percentage
 
 // --- Font Metrics Cache ---
 const fontXHeightRatios = {};
@@ -867,12 +878,15 @@ function setupTestScreen() {
             target.offsetHeight; // force reflow
             target.style.animation = '';
 
-            // Show/hide distance bottom panel
+            // Show/hide distance bottom panels
             const bottomPanel = $('#snellen-bottom-panel');
+            const blPanel = $('#bl-bottom-panel');
             if (tab.dataset.tab === 'distance') {
                 bottomPanel.classList.remove('hidden');
+                blPanel.classList.remove('hidden');
             } else {
                 bottomPanel.classList.add('hidden');
+                blPanel.classList.add('hidden');
             }
         });
     });
@@ -1036,23 +1050,117 @@ function setupTestScreen() {
     $('#mirror-checkbox').addEventListener('change', () => renderDistanceTest());
 
     $('#snellen-refresh-btn').addEventListener('click', () => {
-        distanceLetters = pickSnellenLetters();
+        if (baileyLovieMode) {
+            blLetters = pickBaileyLovieLetters();
+        } else {
+            distanceLetters = pickSnellenLetters();
+        }
         renderDistanceTest();
     });
 
     $('#snellen-up-btn').addEventListener('click', () => {
-        if (distanceSnellenIndex > 0) {
-            distanceSnellenIndex--;
-            distanceLetters = pickSnellenLetters();
-            renderDistanceTest();
+        if (baileyLovieMode) {
+            if (blLogmarIndex > 0) {
+                blLogmarIndex--;
+                blLetters = pickBaileyLovieLetters();
+                renderDistanceTest();
+            }
+        } else {
+            if (distanceSnellenIndex > 0) {
+                distanceSnellenIndex--;
+                distanceLetters = pickSnellenLetters();
+                renderDistanceTest();
+            }
         }
     });
 
     $('#snellen-down-btn').addEventListener('click', () => {
-        if (distanceSnellenIndex < SNELLEN_LEVELS.length - 1) {
-            distanceSnellenIndex++;
-            distanceLetters = pickSnellenLetters();
-            renderDistanceTest();
+        if (baileyLovieMode) {
+            if (blLogmarIndex < LOGMAR_LEVELS.length - 1) {
+                blLogmarIndex++;
+                blLetters = pickBaileyLovieLetters();
+                renderDistanceTest();
+            }
+        } else {
+            if (distanceSnellenIndex < SNELLEN_LEVELS.length - 1) {
+                distanceSnellenIndex++;
+                distanceLetters = pickSnellenLetters();
+                renderDistanceTest();
+            }
+        }
+    });
+
+    // --- Bailey-Lovie toggle ---
+    $('#bl-toggle-btn').addEventListener('click', () => {
+        baileyLovieMode = !baileyLovieMode;
+        const btn = $('#bl-toggle-btn');
+        const contrastPanel = $('#contrast-panel');
+
+        btn.classList.toggle('active', baileyLovieMode);
+
+        if (baileyLovieMode) {
+            contrastPanel.classList.remove('hidden');
+            if (blLetters.length === 0) blLetters = pickBaileyLovieLetters();
+        } else {
+            contrastPanel.classList.add('hidden');
+            contrastPercent = 100;
+            $('#contrast-value').textContent = '100%';
+            updateContrastSlider();
+        }
+        renderDistanceTest();
+    });
+
+    // --- Contrast controls ---
+    $('#contrast-slider').addEventListener('input', () => {
+        contrastPercent = parseFloat($('#contrast-slider').value);
+        $('#contrast-value').textContent = contrastPercent <= 1.25
+            ? contrastPercent.toFixed(2) + '%'
+            : contrastPercent <= 10
+            ? contrastPercent.toFixed(1) + '%'
+            : Math.round(contrastPercent) + '%';
+        renderDistanceTest();
+    });
+
+    $('#contrast-up-btn').addEventListener('click', () => {
+        const idx = CONTRAST_LEVELS.indexOf(contrastPercent);
+        if (idx > 0) {
+            contrastPercent = CONTRAST_LEVELS[idx - 1];
+        } else if (idx === -1) {
+            // Find next higher preset
+            const higher = CONTRAST_LEVELS.filter(l => l > contrastPercent);
+            contrastPercent = higher.length ? higher[higher.length - 1] : 100;
+        }
+        updateContrastSlider();
+        renderDistanceTest();
+    });
+
+    $('#contrast-down-btn').addEventListener('click', () => {
+        const idx = CONTRAST_LEVELS.indexOf(contrastPercent);
+        if (idx >= 0 && idx < CONTRAST_LEVELS.length - 1) {
+            contrastPercent = CONTRAST_LEVELS[idx + 1];
+        } else if (idx === -1) {
+            // Find next lower preset
+            const lower = CONTRAST_LEVELS.filter(l => l < contrastPercent);
+            contrastPercent = lower.length ? lower[0] : 1.25;
+        }
+        updateContrastSlider();
+        renderDistanceTest();
+    });
+
+    // --- Luminance calibration ---
+    initLuminanceCalibration();
+
+    $('#luminance-cal-btn').addEventListener('click', () => {
+        $('#luminance-modal').classList.remove('hidden');
+    });
+
+    $('#luminance-modal-close').addEventListener('click', () => {
+        $('#luminance-modal').classList.add('hidden');
+    });
+
+    $('#luminance-modal').addEventListener('click', (e) => {
+        if (e.target === $('#luminance-modal')) {
+            $('#luminance-modal').classList.add('hidden');
         }
     });
 
@@ -1105,6 +1213,15 @@ function updateTestInfoBar() {
         `Vergence: ${vergence} D`;
 }
 
+// --- Repeat content 2x ---
+// Clones all child elements so the user gets a second full copy to scroll through.
+function repeatContent(contentEl) {
+    const origItems = Array.from(contentEl.children);
+    origItems.forEach(item => {
+        contentEl.appendChild(item.cloneNode(true));
+    });
+}
+
 function renderStandardTestType(testDistanceCm) {
     const container = $('#standard-test-container');
     container.innerHTML = '';
@@ -1114,8 +1231,10 @@ function renderStandardTestType(testDistanceCm) {
     const testFont = '"Times New Roman", "Georgia", serif';
     const xRatio = getXHeightRatio(testFont);
 
-    // Container width: 50% at 40cm, 75% at 60cm (linear interpolation)
-    const widthPercent = 50 + (testDistanceCm - 40) * 1.25;
+    // Container width scales with distance to simulate phoropter field of view
+    // Narrower at close range, wider at far range
+    // 30% at 30cm, 50% at 40cm, 75% at 60cm, clamped 25%-95%
+    const widthPercent = Math.max(25, Math.min(95, 50 + (testDistanceCm - 40) * 1.25));
     container.style.maxWidth = widthPercent + '%';
 
     M_SIZES.forEach(m => {
@@ -1162,6 +1281,8 @@ function renderStandardTestType(testDistanceCm) {
         sample.appendChild(meta);
         container.appendChild(sample);
     });
+
+    repeatContent(container);
 }
 
 // Build an SVG element containing sheet music notation.
@@ -1461,6 +1582,8 @@ function renderOccupationSamples() {
         sample.appendChild(meta);
         container.appendChild(sample);
     });
+
+    repeatContent(container);
 }
 
 function renderDocumentSamples() {
@@ -1511,6 +1634,8 @@ function renderDocumentSamples() {
         sample.appendChild(meta);
         container.appendChild(sample);
     });
+
+    repeatContent(container);
 }
 
 // ==========================================
@@ -1543,6 +1668,14 @@ function pickSnellenLetters() {
     return letters;
 }
 
+function pickBaileyLovieLetters() {
+    const letters = [];
+    for (let i = 0; i < 5; i++) {
+        letters.push(BAILEY_LOVIE_LETTERS[Math.floor(Math.random() * BAILEY_LOVIE_LETTERS.length)]);
+    }
+    return letters;
+}
+
 function renderDistanceTest() {
     const container = $('#snellen-letters');
     if (!container) return;
@@ -1554,12 +1687,38 @@ function renderDistanceTest() {
     // Convert distance to mm
     const distMM = unit === 'ft' ? sliderVal * 304.8 : sliderVal * 1000;
 
-    const snellenDenom = SNELLEN_LEVELS[distanceSnellenIndex];
+    let letterHeightMM, indicatorText, currentLetters;
 
-    // Letter height: subtends 5 * (denom/20) arcminutes at testing distance
-    const arcminTotal = 5 * snellenDenom / 20;
-    const radians = arcminTotal * Math.PI / (180 * 60);
-    const letterHeightMM = distMM * Math.tan(radians);
+    if (baileyLovieMode) {
+        // Bailey-Lovie: LogMAR progression
+        const logmar = LOGMAR_LEVELS[blLogmarIndex];
+        const snellenDenom = 20 * Math.pow(10, logmar);
+
+        // Letter height: subtends 5 * (denom/20) arcminutes at testing distance
+        const arcminTotal = 5 * snellenDenom / 20;
+        const radians = arcminTotal * Math.PI / (180 * 60);
+        letterHeightMM = distMM * Math.tan(radians);
+
+        indicatorText = `LogMAR ${logmar.toFixed(1)} (≈20/${Math.round(snellenDenom)})`;
+
+        if (blLetters.length === 0) {
+            blLetters = pickBaileyLovieLetters();
+        }
+        currentLetters = blLetters;
+    } else {
+        // Standard Snellen
+        const snellenDenom = SNELLEN_LEVELS[distanceSnellenIndex];
+        const arcminTotal = 5 * snellenDenom / 20;
+        const radians = arcminTotal * Math.PI / (180 * 60);
+        letterHeightMM = distMM * Math.tan(radians);
+
+        indicatorText = `20/${snellenDenom}`;
+
+        if (distanceLetters.length === 0) {
+            distanceLetters = pickSnellenLetters();
+        }
+        currentLetters = distanceLetters;
+    }
 
     // Convert physical cap-height to CSS font-size
     const optFont = '"Arial", "Helvetica", sans-serif';
@@ -1568,24 +1727,70 @@ function renderDistanceTest() {
     const cssFontSize = mmToCSS(emSizeMM);
 
     // Update indicator
-    $('#snellen-indicator').textContent = `20/${snellenDenom}`;
+    $('#snellen-indicator').textContent = indicatorText;
 
-    // Pick letters if empty
-    if (distanceLetters.length === 0) {
-        distanceLetters = pickSnellenLetters();
-    }
+    // Calculate letter color from contrast (Weber contrast on white background)
+    // C = (Lb - Lt) / Lb, so Lt = Lb * (1 - C)
+    // With white bg (255): letterGray = 255 * (1 - contrastPercent/100)
+    const letterGray = Math.round(255 * (1 - contrastPercent / 100));
+    const letterColor = `rgb(${letterGray}, ${letterGray}, ${letterGray})`;
 
     // Render
     container.innerHTML = '';
     container.style.fontSize = cssFontSize + 'px';
     container.style.fontFamily = optFont;
     container.style.transform = mirror ? 'scaleX(-1)' : 'none';
+    container.style.color = letterColor;
 
-    distanceLetters.forEach(letter => {
+    currentLetters.forEach(letter => {
         const span = document.createElement('span');
         span.className = 'snellen-letter';
         span.textContent = letter;
         container.appendChild(span);
+    });
+}
+
+function updateContrastSlider() {
+    const slider = $('#contrast-slider');
+    slider.value = contrastPercent;
+    $('#contrast-value').textContent = contrastPercent <= 1.25
+        ? contrastPercent.toFixed(2) + '%'
+        : contrastPercent <= 10
+        ? contrastPercent.toFixed(1) + '%'
+        : Math.round(contrastPercent) + '%';
+}
+
+function initLuminanceCalibration() {
+    const slider = $('#gamma-slider');
+    const circle = $('#luminance-inner-circle');
+    const valueDisplay = $('#gamma-value');
+
+    // Restore saved gamma
+    const saved = localStorage.getItem('nearpoint_gamma_grey');
+    if (saved) {
+        slider.value = saved;
+    }
+
+    function updateGamma() {
+        const v = slider.value;
+        circle.style.backgroundColor = `rgb(${v},${v},${v})`;
+        valueDisplay.textContent = v;
+    }
+
+    slider.addEventListener('input', updateGamma);
+    updateGamma();
+
+    function nudgeGamma(delta) {
+        slider.value = Math.max(60, Math.min(220, parseInt(slider.value) + delta));
+        updateGamma();
+    }
+
+    $('#gamma-down-btn').addEventListener('click', () => nudgeGamma(-1));
+    $('#gamma-up-btn').addEventListener('click', () => nudgeGamma(1));
+
+    $('#luminance-save-btn').addEventListener('click', () => {
+        localStorage.setItem('nearpoint_gamma_grey', slider.value);
+        $('#luminance-modal').classList.add('hidden');
     });
 }
 

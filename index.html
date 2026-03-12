@@ -290,6 +290,42 @@
             <div class="distance-test-display">
                 <div class="snellen-letters" id="snellen-letters"></div>
             </div>
+
+            <!-- Bailey-Lovie toggle (bottom-left) -->
+            <div class="bl-bottom-panel hidden" id="bl-bottom-panel">
+                <button id="bl-toggle-btn" class="btn-snellen bl-toggle-btn" title="Toggle Bailey-Lovie chart">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <text x="2" y="10" font-size="7" font-weight="700" fill="currentColor" stroke="none" font-family="Arial">B</text>
+                        <text x="13" y="10" font-size="7" font-weight="700" fill="currentColor" stroke="none" font-family="Arial">L</text>
+                        <line x1="2" y1="14" x2="22" y2="14" stroke-width="1.5"/>
+                        <rect x="2" y="16" width="20" height="2" rx="1" fill="currentColor" opacity="0.4" stroke="none"/>
+                        <rect x="5" y="20" width="14" height="1.5" rx="0.75" fill="currentColor" opacity="0.25" stroke="none"/>
+                    </svg>
+                </button>
+
+                <!-- Contrast controls (shown when B-L is active) -->
+                <div id="contrast-panel" class="contrast-panel hidden">
+                    <button id="luminance-cal-btn" class="btn-snellen btn-luminance-cal" title="Luminance calibration">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="5"/>
+                            <line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+                            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+                            <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+                            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+                        </svg>
+                    </button>
+                    <button id="contrast-up-btn" class="btn-snellen" title="Increase contrast">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    </button>
+                    <span id="contrast-value" class="contrast-value">100%</span>
+                    <input type="range" id="contrast-slider" class="contrast-slider" min="1.25" max="100" value="100" step="0.25">
+                    <button id="contrast-down-btn" class="btn-snellen" title="Decrease contrast">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Snellen controls (bottom-right) -->
             <div class="snellen-bottom-panel hidden" id="snellen-bottom-panel">
                 <div class="snellen-indicator" id="snellen-indicator">20/40</div>
                 <div class="snellen-controls">
@@ -302,6 +338,36 @@
                     <button id="snellen-down-btn" class="btn-snellen" title="Smaller letters (harder)">
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
                     </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Luminance Calibration Modal -->
+        <div id="luminance-modal" class="luminance-modal hidden">
+            <div class="luminance-modal-content">
+                <button id="luminance-modal-close" class="luminance-modal-close">&times;</button>
+                <h2>Display Luminance Calibration</h2>
+                <p class="luminance-modal-desc">Adjust the slider until the inner circle <strong>disappears</strong> into the checkerboard pattern. This calibrates your display's gamma for accurate contrast rendering.</p>
+                <div class="luminance-cal-area">
+                    <div class="luminance-checkerboard">
+                        <div id="luminance-inner-circle" class="luminance-inner-circle"></div>
+                    </div>
+                </div>
+                <div class="luminance-slider-row">
+                    <button id="gamma-down-btn" class="gamma-nudge" title="Darker (−1)">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+                    </button>
+                    <span class="luminance-slider-label">Darker</span>
+                    <input type="range" id="gamma-slider" class="gamma-slider" min="60" max="220" value="128" step="1">
+                    <span class="luminance-slider-label">Brighter</span>
+                    <button id="gamma-up-btn" class="gamma-nudge" title="Brighter (+1)">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+                    </button>
+                </div>
+                <div class="luminance-gamma-value">Grey value: <span id="gamma-value">128</span></div>
+                <p class="luminance-modal-hint">Ensure room lighting and monitor brightness match your intended testing conditions before calibrating.</p>
+                <div class="luminance-modal-actions">
+                    <button id="luminance-save-btn" class="btn btn-primary btn-small">Save Calibration</button>
                 </div>
             </div>
         </div>
