@@ -2262,12 +2262,15 @@ function csfClosePatientResults() {
 }
 
 // Normative letter-optotype CSF: log-Gaussian in log-frequency space
-// Peaks at ~0.6 cpd (20/50), drops steeply at high SF where resolution limits apply
-// At 20/10 (3 cpd) average threshold is ~30%, at 20/20 (1.5 cpd) ~5%, at 20/50 (0.6 cpd) ~2%
+// Peaks at ~0.6 cpd (20/50). Beyond 20/20 (1.5 cpd) is above-average territory —
+// the average patient cannot reliably read smaller than 20/20, so normative
+// sensitivity is clamped to 1.0 (100% threshold) for cpd > 1.5.
 function csfNormative(cpd) {
-    const peak = 50;       // peak sensitivity (at fp)
-    const fp = 0.6;        // peak spatial frequency (cpd)
-    const sigma = 0.3;     // width in log10 units
+    const peak = 50;
+    const fp = 0.6;
+    const sigma = 0.3;
+    // Beyond 20/20: any measurable sensitivity is above average
+    if (cpd > 1.5) return 1.0;
     const logRatio = Math.log10(cpd / fp);
     return peak * Math.exp(-(logRatio * logRatio) / (2 * sigma * sigma));
 }
