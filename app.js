@@ -2261,11 +2261,15 @@ function csfClosePatientResults() {
     if (overlay) overlay.classList.add('hidden');
 }
 
-// Normative CSF model: CS(f) = a * f^b * exp(-c * f)
-// Parametric fit to published letter-optotype norms (peak ~3-4 cpd)
+// Normative letter-optotype CSF: log-Gaussian in log-frequency space
+// Peaks at ~0.6 cpd (20/50), drops steeply at high SF where resolution limits apply
+// At 20/10 (3 cpd) average threshold is ~30%, at 20/20 (1.5 cpd) ~5%, at 20/50 (0.6 cpd) ~2%
 function csfNormative(cpd) {
-    const a = 75, b = 0.82, c = 0.2;
-    return a * Math.pow(cpd, b) * Math.exp(-c * cpd);
+    const peak = 50;       // peak sensitivity (at fp)
+    const fp = 0.6;        // peak spatial frequency (cpd)
+    const sigma = 0.3;     // width in log10 units
+    const logRatio = Math.log10(cpd / fp);
+    return peak * Math.exp(-(logRatio * logRatio) / (2 * sigma * sigma));
 }
 
 // Catmull-Rom spline: returns array of {x, y} points for smooth curve through data

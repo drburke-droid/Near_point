@@ -354,9 +354,13 @@ function showPass3Suggestion(results, noisyDenoms) {
 // CSF Graph Rendering (Normalized + Smoothed)
 // ==========================================
 
+// Normative letter-optotype CSF: log-Gaussian in log-frequency space
 function csfNormative(cpd) {
-    const a = 75, b = 0.82, c = 0.2;
-    return a * Math.pow(cpd, b) * Math.exp(-c * cpd);
+    const peak = 50;
+    const fp = 0.6;
+    const sigma = 0.3;
+    const logRatio = Math.log10(cpd / fp);
+    return peak * Math.exp(-(logRatio * logRatio) / (2 * sigma * sigma));
 }
 
 function catmullRomSpline(points, segments) {
