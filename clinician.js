@@ -200,8 +200,9 @@ function showResults(results) {
     tbody.innerHTML = '';
     results.forEach(r => {
         const tr = document.createElement('tr');
+        const denomLabel = Number.isInteger(r.denom) ? r.denom : Math.round(r.denom);
         tr.innerHTML = `
-            <td>20/${r.denom}</td>
+            <td>20/${denomLabel}</td>
             <td>${r.cpd.toFixed(2)}</td>
             <td>${r.threshold < 10 ? r.threshold.toFixed(1) : Math.round(r.threshold)}%</td>
             <td>${r.sensitivity.toFixed(1)}</td>
@@ -225,14 +226,39 @@ function showCancelled() {
 }
 
 // ==========================================
-// CSF Graph Rendering (Normalized)
+// CSF Graph Rendering (Normalized + Smoothed)
 // ==========================================
 
-// Normative CSF model: CS(f) = a * f^b * exp(-c * f)
-// Parametric fit to published letter-optotype norms (peak ~3-4 cpd)
 function csfNormative(cpd) {
     const a = 75, b = 0.82, c = 0.2;
     return a * Math.pow(cpd, b) * Math.exp(-c * cpd);
+}
+
+function catmullRomSpline(points, segments) {
+    if (points.length < 2) return points;
+    const result = [];
+    const pts = [
+        { x: 2 * points[0].x - points[1].x, y: 2 * points[0].y - points[1].y },
+        ...points,
+        { x: 2 * points[points.length - 1].x - points[points.length - 2].x,
+          y: 2 * points[points.length - 1].y - points[points.length - 2].y }
+    ];
+    for (let i = 1; i < pts.length - 2; i++) {
+        const p0 = pts[i - 1], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2];
+        for (let s = 0; s < segments; s++) {
+            const t = s / segments;
+            const t2 = t * t, t3 = t2 * t;
+            const x = 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * t +
+                (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
+                (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3);
+            const y = 0.5 * ((2 * p1.y) + (-p0.y + p2.y) * t +
+                (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
+                (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3);
+            result.push({ x, y });
+        }
+    }
+    result.push(points[points.length - 1]);
+    return result;
 }
 
 function renderCSFGraph(canvas, results) {
@@ -244,49 +270,48 @@ function renderCSFGraph(canvas, results) {
     const ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
 
+    const font = 'Inter, -apple-system, sans-serif';
+
     ctx.clearRect(0, 0, w, h);
 
-    // Margins
-    const ml = 60, mr = 25, mt = 25, mb = 55;
+    const ml = 58, mr = 50, mt = 25, mb = 55;
     const pw = w - ml - mr;
     const ph = h - mt - mb;
 
-    // Compute normalized deviations: dB = 10 * log10(patient_CS / norm_CS)
     const normData = results.map(r => {
         const norm = csfNormative(r.cpd);
         const dB = 10 * Math.log10(Math.max(0.01, r.sensitivity) / norm);
         return { ...r, norm, dB };
     });
 
-    // X-axis: log spatial frequency
     const cpdValues = results.map(r => r.cpd);
-    const logCpdMin = Math.floor(Math.log10(Math.min(...cpdValues)) * 2) / 2;
-    const logCpdMax = Math.ceil(Math.log10(Math.max(...cpdValues)) * 2) / 2;
-
-    // Y-axis: dB deviation, symmetric around 0
+    const logCpdMin = Math.floor(Math.log10(Math.min(...cpdValues)) * 4) / 4 - 0.05;
+    const logCpdMax = Math.ceil(Math.log10(Math.max(...cpdValues)) * 4) / 4 + 0.05;
     const maxAbsDB = Math.max(10, Math.ceil(Math.max(...normData.map(d => Math.abs(d.dB))) / 5) * 5);
-    const yMin = -maxAbsDB;
-    const yMax = maxAbsDB;
+    const yMin = -maxAbsDB, yMax = maxAbsDB;
 
-    function toX(cpd) {
-        return ml + pw * (Math.log10(cpd) - logCpdMin) / (logCpdMax - logCpdMin);
-    }
-    function toY(dB) {
-        return mt + ph * (1 - (dB - yMin) / (yMax - yMin));
-    }
-
-    // --- Background shading ---
+    function toX(cpd) { return ml + pw * (Math.log10(cpd) - logCpdMin) / (logCpdMax - logCpdMin); }
+    function toY(dB) { return mt + ph * (1 - (dB - yMin) / (yMax - yMin)); }
     const zeroY = toY(0);
-    ctx.fillStyle = 'rgba(16, 185, 129, 0.06)';
+
+    // Background gradients
+    const greenGrad = ctx.createLinearGradient(0, mt, 0, zeroY);
+    greenGrad.addColorStop(0, 'rgba(16, 185, 129, 0.12)');
+    greenGrad.addColorStop(1, 'rgba(16, 185, 129, 0.02)');
+    ctx.fillStyle = greenGrad;
     ctx.fillRect(ml, mt, pw, zeroY - mt);
-    ctx.fillStyle = 'rgba(239, 68, 68, 0.06)';
+    const redGrad = ctx.createLinearGradient(0, zeroY, 0, mt + ph);
+    redGrad.addColorStop(0, 'rgba(239, 68, 68, 0.02)');
+    redGrad.addColorStop(1, 'rgba(239, 68, 68, 0.12)');
+    ctx.fillStyle = redGrad;
     ctx.fillRect(ml, zeroY, pw, mt + ph - zeroY);
 
     // Grid
-    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
     ctx.lineWidth = 0.5;
-    for (let lv = logCpdMin; lv <= logCpdMax; lv += 0.5) {
+    for (let lv = Math.floor(logCpdMin * 2) / 2; lv <= logCpdMax; lv += 0.25) {
         const x = toX(Math.pow(10, lv));
+        if (x < ml || x > ml + pw) continue;
         ctx.beginPath(); ctx.moveTo(x, mt); ctx.lineTo(x, mt + ph); ctx.stroke();
     }
     for (let dB = yMin; dB <= yMax; dB += 5) {
@@ -296,121 +321,132 @@ function renderCSFGraph(canvas, results) {
     }
 
     // Axes
-    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(ml, mt); ctx.lineTo(ml, mt + ph); ctx.lineTo(ml + pw, mt + ph);
     ctx.stroke();
 
-    // --- Average line (0 dB) ---
-    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([6, 4]);
+    // Average line
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([8, 5]);
     ctx.beginPath();
     ctx.moveTo(ml, zeroY); ctx.lineTo(ml + pw, zeroY);
     ctx.stroke();
     ctx.setLineDash([]);
 
-    ctx.fillStyle = 'rgba(255,255,255,0.4)';
-    ctx.font = '10px Inter, -apple-system, sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.font = `10px ${font}`;
     ctx.textAlign = 'left';
-    ctx.fillText('Average', ml + pw + 4, zeroY + 3);
+    ctx.fillText('AVERAGE', ml + pw + 5, zeroY + 4);
 
-    // X-axis labels
-    ctx.fillStyle = 'rgba(255,255,255,0.6)';
-    ctx.font = '11px Inter, -apple-system, sans-serif';
-    ctx.textAlign = 'center';
-    for (let lv = logCpdMin; lv <= logCpdMax; lv += 0.5) {
-        const val = Math.pow(10, lv);
-        const x = toX(val);
-        ctx.fillText(val < 1 ? val.toFixed(2) : val.toFixed(1), x, mt + ph + 18);
-    }
-    ctx.fillText('Spatial Frequency (cpd)', ml + pw / 2, mt + ph + 42);
+    // Spline
+    const dataPoints = normData.map(d => ({ x: toX(d.cpd), y: toY(d.dB) }));
+    const spline = catmullRomSpline(dataPoints, 20);
 
-    // Y-axis labels (dB)
-    ctx.textAlign = 'right';
-    for (let dB = yMin; dB <= yMax; dB += 5) {
-        const y = toY(dB);
-        const label = (dB > 0 ? '+' : '') + dB;
-        ctx.fillStyle = dB > 0 ? 'rgba(16, 185, 129, 0.7)'
-                      : dB < 0 ? 'rgba(239, 68, 68, 0.7)'
-                      : 'rgba(255,255,255,0.6)';
-        ctx.fillText(label, ml - 8, y + 4);
-    }
+    // Gradient fills
     ctx.save();
-    ctx.translate(13, mt + ph / 2);
-    ctx.rotate(-Math.PI / 2);
-    ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(255,255,255,0.6)';
-    ctx.fillText('Deviation from Average (dB)', 0, 0);
-    ctx.restore();
-
-    // "Better" / "Worse" labels
-    ctx.font = '9px Inter, -apple-system, sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillStyle = 'rgba(16, 185, 129, 0.5)';
-    ctx.fillText('BETTER', ml + 6, mt + 14);
-    ctx.fillStyle = 'rgba(239, 68, 68, 0.5)';
-    ctx.fillText('WORSE', ml + 6, mt + ph - 6);
-
-    // --- Fill area between patient line and zero line ---
-    ctx.save();
+    ctx.beginPath(); ctx.rect(ml, mt, pw, zeroY - mt); ctx.clip();
+    const gf = ctx.createLinearGradient(0, mt, 0, zeroY);
+    gf.addColorStop(0, 'rgba(52, 211, 153, 0.35)');
+    gf.addColorStop(1, 'rgba(52, 211, 153, 0.05)');
+    ctx.fillStyle = gf;
     ctx.beginPath();
-    ctx.rect(ml, mt, pw, zeroY - mt);
-    ctx.clip();
-    ctx.fillStyle = 'rgba(16, 185, 129, 0.15)';
-    ctx.beginPath();
-    ctx.moveTo(toX(normData[0].cpd), zeroY);
-    normData.forEach(d => ctx.lineTo(toX(d.cpd), toY(d.dB)));
-    ctx.lineTo(toX(normData[normData.length - 1].cpd), zeroY);
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
+    ctx.moveTo(spline[0].x, zeroY);
+    spline.forEach(p => ctx.lineTo(p.x, p.y));
+    ctx.lineTo(spline[spline.length - 1].x, zeroY);
+    ctx.closePath(); ctx.fill(); ctx.restore();
 
     ctx.save();
+    ctx.beginPath(); ctx.rect(ml, zeroY, pw, mt + ph - zeroY); ctx.clip();
+    const rf = ctx.createLinearGradient(0, zeroY, 0, mt + ph);
+    rf.addColorStop(0, 'rgba(248, 113, 113, 0.05)');
+    rf.addColorStop(1, 'rgba(248, 113, 113, 0.35)');
+    ctx.fillStyle = rf;
     ctx.beginPath();
-    ctx.rect(ml, zeroY, pw, mt + ph - zeroY);
-    ctx.clip();
-    ctx.fillStyle = 'rgba(239, 68, 68, 0.15)';
+    ctx.moveTo(spline[0].x, zeroY);
+    spline.forEach(p => ctx.lineTo(p.x, p.y));
+    ctx.lineTo(spline[spline.length - 1].x, zeroY);
+    ctx.closePath(); ctx.fill(); ctx.restore();
+
+    // Glow
+    ctx.save();
+    ctx.shadowColor = 'rgba(59, 130, 246, 0.5)';
+    ctx.shadowBlur = 12;
+    ctx.strokeStyle = 'rgba(59, 130, 246, 0.3)';
+    ctx.lineWidth = 6;
+    ctx.lineJoin = 'round';
     ctx.beginPath();
-    ctx.moveTo(toX(normData[0].cpd), zeroY);
-    normData.forEach(d => ctx.lineTo(toX(d.cpd), toY(d.dB)));
-    ctx.lineTo(toX(normData[normData.length - 1].cpd), zeroY);
-    ctx.closePath();
-    ctx.fill();
+    spline.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+    ctx.stroke();
     ctx.restore();
 
-    // Patient data line
-    ctx.strokeStyle = '#3b82f6';
+    // Main curve
+    const lineGrad = ctx.createLinearGradient(spline[0].x, 0, spline[spline.length - 1].x, 0);
+    lineGrad.addColorStop(0, '#60a5fa');
+    lineGrad.addColorStop(0.5, '#a78bfa');
+    lineGrad.addColorStop(1, '#818cf8');
+    ctx.strokeStyle = lineGrad;
     ctx.lineWidth = 2.5;
     ctx.lineJoin = 'round';
     ctx.beginPath();
-    normData.forEach((d, i) => {
-        const x = toX(d.cpd);
-        const y = toY(d.dB);
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-    });
+    spline.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
     ctx.stroke();
 
     // Data points
     normData.forEach(d => {
-        const x = toX(d.cpd);
-        const y = toY(d.dB);
-        ctx.beginPath();
-        ctx.arc(x, y, 5, 0, Math.PI * 2);
-        ctx.fillStyle = d.dB >= 0 ? '#10b981' : '#ef4444';
+        const x = toX(d.cpd), y = toY(d.dB);
+        const color = d.dB >= 0 ? '#34d399' : '#f87171';
+        ctx.beginPath(); ctx.arc(x, y, 10, 0, Math.PI * 2);
+        ctx.fillStyle = d.dB >= 0 ? 'rgba(52,211,153,0.4)' : 'rgba(248,113,113,0.4)';
         ctx.fill();
-        ctx.strokeStyle = 'white';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
+        ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+        ctx.fillStyle = color; ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = 1.5; ctx.stroke();
     });
 
-    // Snellen labels
-    ctx.fillStyle = 'rgba(255,255,255,0.45)';
-    ctx.font = '9px Inter, -apple-system, sans-serif';
+    // X-axis labels at data points
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.font = `10px ${font}`;
     ctx.textAlign = 'center';
     normData.forEach(d => {
-        ctx.fillText(`20/${d.denom}`, toX(d.cpd), mt + ph + 30);
+        ctx.fillText(d.cpd < 1 ? d.cpd.toFixed(2) : d.cpd.toFixed(1), toX(d.cpd), mt + ph + 16);
     });
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.font = `9px ${font}`;
+    ctx.fillText('Spatial Frequency (cpd)', ml + pw / 2, mt + ph + 42);
+
+    // Snellen labels
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.font = `8px ${font}`;
+    normData.forEach(d => {
+        const denomLabel = Number.isInteger(d.denom) ? d.denom : Math.round(d.denom);
+        ctx.fillText(`20/${denomLabel}`, toX(d.cpd), mt + ph + 27);
+    });
+
+    // Y-axis
+    ctx.font = `10px ${font}`;
+    ctx.textAlign = 'right';
+    for (let dB = yMin; dB <= yMax; dB += 5) {
+        const y = toY(dB);
+        ctx.fillStyle = dB > 0 ? 'rgba(52,211,153,0.6)' : dB < 0 ? 'rgba(248,113,113,0.6)' : 'rgba(255,255,255,0.5)';
+        ctx.fillText((dB > 0 ? '+' : '') + dB + ' dB', ml - 6, y + 3);
+    }
+    ctx.save();
+    ctx.translate(11, mt + ph / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.font = `9px ${font}`;
+    ctx.fillText('vs. Average', 0, 0);
+    ctx.restore();
+
+    // Better / Worse
+    ctx.font = `bold 9px ${font}`;
+    ctx.textAlign = 'right';
+    ctx.fillStyle = 'rgba(52,211,153,0.35)';
+    ctx.fillText('BETTER \u25B2', ml + pw - 4, mt + 14);
+    ctx.fillStyle = 'rgba(248,113,113,0.35)';
+    ctx.fillText('WORSE \u25BC', ml + pw - 4, mt + ph - 6);
 }

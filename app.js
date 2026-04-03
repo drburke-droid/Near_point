@@ -584,7 +584,8 @@ let blLetters = [];
 let contrastPercent = 100; // Weber contrast percentage
 
 // --- CSF Test State ---
-const CSF_LEVELS = [100, 70, 50, 40, 30, 25]; // Snellen denominators to test
+// Pass 1: coarse grid across the spatial frequency range
+const CSF_COARSE_LEVELS = [100, 70, 50, 40, 30, 25];
 const CSF_LETTERS_PER_LINE = 8;
 const CSF_MIN_CONTRAST = 1.25; // Display floor %
 
@@ -592,6 +593,7 @@ const csfState = {
     active: false,
     pass: 1,            // 1 = coarse, 2 = refined
     levelIndex: 0,
+    levels: [],         // current pass's level list (denoms, may include non-standard like 20/18)
     currentLetters: [],
     currentContrasts: [],
     results: {},        // keyed by snellenDenom: { coarseThreshold, refinedThreshold }
@@ -1717,7 +1719,7 @@ function renderDistanceTest() {
 
     if (csfState.active) {
         // CSF mode: use current level's Snellen denominator
-        const snellenDenom = CSF_LEVELS[csfState.levelIndex] || CSF_LEVELS[CSF_LEVELS.length - 1];
+        const snellenDenom = csfState.levels[csfState.levelIndex] || csfState.levels[csfState.levels.length - 1];
         const arcminTotal = 5 * snellenDenom / 20;
         const radians = arcminTotal * Math.PI / (180 * 60);
         letterHeightMM = distMM * Math.tan(radians);
@@ -1827,17 +1829,17 @@ function csfComputeContrasts(startContrast, endContrast, count) {
 }
 
 function csfAdaptiveStart(levelIndex) {
+    const denom = csfState.levels[levelIndex];
     if (csfState.pass === 2) {
-        // Pass 2: use this level's coarse threshold to center the range
-        const denom = CSF_LEVELS[levelIndex];
-        const result = csfState.results[denom];
-        if (result && result.coarseThreshold != null) {
-            return Math.min(100, result.coarseThreshold * 1.8);
+        // Pass 2: interpolate expected threshold from neighboring coarse results
+        const expected = csfInterpolateThreshold(denom);
+        if (expected != null) {
+            return Math.min(100, expected * 1.8);
         }
     }
     if (levelIndex === 0) return 100;
     // Pass 1: use previous level's threshold to adapt starting contrast
-    const prevDenom = CSF_LEVELS[levelIndex - 1];
+    const prevDenom = csfState.levels[levelIndex - 1];
     const prevResult = csfState.results[prevDenom];
     if (prevResult) {
         const prevThreshold = prevResult.coarseThreshold;
@@ -1849,16 +1851,72 @@ function csfAdaptiveStart(levelIndex) {
 }
 
 function csfAdaptiveEnd(levelIndex) {
+    const denom = csfState.levels[levelIndex];
     if (csfState.pass === 2) {
-        // Pass 2: narrow range — end at 30% of coarse threshold
-        const denom = CSF_LEVELS[levelIndex];
-        const result = csfState.results[denom];
-        if (result && result.coarseThreshold != null) {
-            return Math.max(CSF_MIN_CONTRAST, result.coarseThreshold * 0.3);
+        // Pass 2: narrow range around interpolated threshold
+        const expected = csfInterpolateThreshold(denom);
+        if (expected != null) {
+            return Math.max(CSF_MIN_CONTRAST, expected * 0.3);
         }
     }
     // Pass 1: sweep all the way to the display floor
     return CSF_MIN_CONTRAST;
+}
+
+// Interpolate expected threshold for a denom using coarse results
+function csfInterpolateThreshold(denom) {
+    const result = csfState.results[denom];
+    if (result && result.coarseThreshold != null) return result.coarseThreshold;
+
+    // Find nearest coarse results above and below this denom
+    const coarseKeys = CSF_COARSE_LEVELS.filter(d => csfState.results[d] && csfState.results[d].coarseThreshold != null);
+    if (coarseKeys.length === 0) return null;
+
+    const above = coarseKeys.filter(d => d > denom).sort((a, b) => a - b)[0];
+    const below = coarseKeys.filter(d => d < denom).sort((a, b) => b - a)[0];
+
+    if (above != null && below != null) {
+        // Log-linear interpolation between neighbors
+        const logD = Math.log10(denom);
+        const logA = Math.log10(above);
+        const logB = Math.log10(below);
+        const tA = Math.log10(csfState.results[above].coarseThreshold);
+        const tB = Math.log10(csfState.results[below].coarseThreshold);
+        const t = (logD - logB) / (logA - logB);
+        return Math.pow(10, tB + t * (tA - tB));
+    }
+    if (above != null) return csfState.results[above].coarseThreshold;
+    if (below != null) return csfState.results[below].coarseThreshold;
+    return null;
+}
+
+// Generate pass 2 levels: insert intermediate sizes where CSF changes fastest
+function csfGenerateRefinedLevels() {
+    const coarseResults = CSF_COARSE_LEVELS
+        .filter(d => csfState.results[d] && csfState.results[d].coarseThreshold != null)
+        .sort((a, b) => b - a); // descending (large letters first)
+    if (coarseResults.length < 2) return [...coarseResults];
+
+    const levels = [];
+    for (let i = 0; i < coarseResults.length; i++) {
+        levels.push(coarseResults[i]);
+        if (i < coarseResults.length - 1) {
+            const d1 = coarseResults[i];
+            const d2 = coarseResults[i + 1];
+            const t1 = csfState.results[d1].coarseThreshold;
+            const t2 = csfState.results[d2].coarseThreshold;
+            // Compute how much the CSF changed between these two levels (in log space)
+            const deltaLog = Math.abs(Math.log10(t1) - Math.log10(t2));
+            // If the change is large (> 0.2 log units ≈ 60% change), insert a midpoint
+            if (deltaLog > 0.2) {
+                const midDenom = Math.round(Math.sqrt(d1 * d2)); // geometric mean
+                if (midDenom !== d1 && midDenom !== d2) {
+                    levels.push(midDenom);
+                }
+            }
+        }
+    }
+    return levels.sort((a, b) => b - a); // descending
 }
 
 function csfEstimateThreshold(contrasts, errors) {
@@ -1892,6 +1950,7 @@ function csfStartTest() {
     csfState.active = true;
     csfState.pass = 1;
     csfState.levelIndex = 0;
+    csfState.levels = [...CSF_COARSE_LEVELS]; // pass 1 uses coarse grid
     csfState.results = {};
     csfState.waitingForClinician = false;
 
@@ -1923,7 +1982,7 @@ function csfStopTest() {
 }
 
 function csfNextLine() {
-    const denom = CSF_LEVELS[csfState.levelIndex];
+    const denom = csfState.levels[csfState.levelIndex];
     const startContrast = csfAdaptiveStart(csfState.levelIndex);
     const endContrast = csfAdaptiveEnd(csfState.levelIndex);
 
@@ -1934,10 +1993,11 @@ function csfNextLine() {
     // Render on patient display
     renderDistanceTest();
 
-    // Update indicator
+    // Update indicator — show fractional denoms like 20/35 for non-standard sizes
     const indicator = $('#snellen-indicator');
     if (indicator) {
-        indicator.textContent = `CSF Pass ${csfState.pass} — 20/${denom}`;
+        const denomLabel = Number.isInteger(denom) ? denom : denom.toFixed(0);
+        indicator.textContent = `CSF Pass ${csfState.pass} — 20/${denomLabel}`;
     }
 
     // Broadcast to clinician
@@ -1947,12 +2007,12 @@ function csfNextLine() {
         contrasts: csfState.currentContrasts,
         pass: csfState.pass,
         levelIndex: csfState.levelIndex,
-        totalLevels: CSF_LEVELS.length
+        totalLevels: csfState.levels.length
     });
 }
 
 function csfProcessResponse(errors) {
-    const denom = CSF_LEVELS[csfState.levelIndex];
+    const denom = csfState.levels[csfState.levelIndex];
     const threshold = csfEstimateThreshold(csfState.currentContrasts, errors);
 
     // Store result
@@ -1970,10 +2030,11 @@ function csfProcessResponse(errors) {
     // Advance to next level
     csfState.levelIndex++;
 
-    if (csfState.levelIndex >= CSF_LEVELS.length) {
+    if (csfState.levelIndex >= csfState.levels.length) {
         if (csfState.pass === 1) {
-            // Start pass 2
+            // Generate refined levels with interpolated sizes where CSF changes most
             csfState.pass = 2;
+            csfState.levels = csfGenerateRefinedLevels();
             csfState.levelIndex = 0;
             csfNextLine();
         } else {
@@ -1986,12 +2047,13 @@ function csfProcessResponse(errors) {
 }
 
 function csfComplete() {
-    // Build final results
-    const finalResults = CSF_LEVELS.map(denom => {
-        const r = csfState.results[denom] || {};
+    // Build final results from all tested levels, sorted by denom descending (large→small)
+    const allDenoms = Object.keys(csfState.results).map(Number).sort((a, b) => b - a);
+    const finalResults = allDenoms.map(denom => {
+        const r = csfState.results[denom];
         const threshold = r.refinedThreshold || r.coarseThreshold || 100;
         const cpd = 30 / denom;
-        const sensitivity = 100 / threshold; // CS = 1 / (threshold fraction)
+        const sensitivity = 100 / threshold;
         return { denom, cpd, threshold, sensitivity };
     });
 
@@ -2019,14 +2081,14 @@ function csfHandleClinicianMessage(data) {
         case 'clinician-ready':
             // Clinician loaded; if we have a pending line, resend
             if (csfState.active && csfState.currentLetters.length > 0) {
-                const denom = CSF_LEVELS[csfState.levelIndex];
+                const denom = csfState.levels[csfState.levelIndex];
                 csfBroadcast('csf-line', {
                     snellenDenom: denom,
                     letters: csfState.currentLetters,
                     contrasts: csfState.currentContrasts,
                     pass: csfState.pass,
                     levelIndex: csfState.levelIndex,
-                    totalLevels: CSF_LEVELS.length
+                    totalLevels: csfState.levels.length
                 });
             }
             break;
@@ -2087,6 +2149,35 @@ function csfNormative(cpd) {
     return a * Math.pow(cpd, b) * Math.exp(-c * cpd);
 }
 
+// Catmull-Rom spline: returns array of {x, y} points for smooth curve through data
+function catmullRomSpline(points, segments) {
+    if (points.length < 2) return points;
+    const result = [];
+    // Pad endpoints by reflecting
+    const pts = [
+        { x: 2 * points[0].x - points[1].x, y: 2 * points[0].y - points[1].y },
+        ...points,
+        { x: 2 * points[points.length - 1].x - points[points.length - 2].x,
+          y: 2 * points[points.length - 1].y - points[points.length - 2].y }
+    ];
+    for (let i = 1; i < pts.length - 2; i++) {
+        const p0 = pts[i - 1], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2];
+        for (let s = 0; s < segments; s++) {
+            const t = s / segments;
+            const t2 = t * t, t3 = t2 * t;
+            const x = 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * t +
+                (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
+                (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3);
+            const y = 0.5 * ((2 * p1.y) + (-p0.y + p2.y) * t +
+                (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
+                (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3);
+            result.push({ x, y });
+        }
+    }
+    result.push(points[points.length - 1]);
+    return result;
+}
+
 function renderCSFGraph(canvas, results) {
     const dpr = window.devicePixelRatio || 1;
     const w = canvas.clientWidth;
@@ -2096,14 +2187,16 @@ function renderCSFGraph(canvas, results) {
     const ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
 
+    const font = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+
     ctx.clearRect(0, 0, w, h);
 
     // Margins
-    const ml = 65, mr = 25, mt = 30, mb = 55;
+    const ml = 58, mr = 50, mt = 30, mb = 55;
     const pw = w - ml - mr;
     const ph = h - mt - mb;
 
-    // Compute normalized deviations: dB = 10 * log10(patient_CS / norm_CS)
+    // Compute normalized deviations
     const normData = results.map(r => {
         const norm = csfNormative(r.cpd);
         const dB = 10 * Math.log10(Math.max(0.01, r.sensitivity) / norm);
@@ -2112,33 +2205,38 @@ function renderCSFGraph(canvas, results) {
 
     // X-axis: log spatial frequency
     const cpdValues = results.map(r => r.cpd);
-    const logCpdMin = Math.floor(Math.log10(Math.min(...cpdValues)) * 2) / 2;
-    const logCpdMax = Math.ceil(Math.log10(Math.max(...cpdValues)) * 2) / 2;
+    const logCpdMin = Math.floor(Math.log10(Math.min(...cpdValues)) * 4) / 4 - 0.05;
+    const logCpdMax = Math.ceil(Math.log10(Math.max(...cpdValues)) * 4) / 4 + 0.05;
 
-    // Y-axis: dB deviation, symmetric around 0
+    // Y-axis: dB deviation, symmetric
     const maxAbsDB = Math.max(10, Math.ceil(Math.max(...normData.map(d => Math.abs(d.dB))) / 5) * 5);
     const yMin = -maxAbsDB;
     const yMax = maxAbsDB;
 
-    function toX(cpd) {
-        return ml + pw * (Math.log10(cpd) - logCpdMin) / (logCpdMax - logCpdMin);
-    }
-    function toY(dB) {
-        return mt + ph * (1 - (dB - yMin) / (yMax - yMin));
-    }
+    function toX(cpd) { return ml + pw * (Math.log10(cpd) - logCpdMin) / (logCpdMax - logCpdMin); }
+    function toY(dB) { return mt + ph * (1 - (dB - yMin) / (yMax - yMin)); }
 
-    // --- Background shading: green above 0, red below 0 ---
     const zeroY = toY(0);
-    ctx.fillStyle = 'rgba(16, 185, 129, 0.06)';
+
+    // --- Background gradient zones ---
+    const greenGrad = ctx.createLinearGradient(0, mt, 0, zeroY);
+    greenGrad.addColorStop(0, 'rgba(16, 185, 129, 0.12)');
+    greenGrad.addColorStop(1, 'rgba(16, 185, 129, 0.02)');
+    ctx.fillStyle = greenGrad;
     ctx.fillRect(ml, mt, pw, zeroY - mt);
-    ctx.fillStyle = 'rgba(239, 68, 68, 0.06)';
+
+    const redGrad = ctx.createLinearGradient(0, zeroY, 0, mt + ph);
+    redGrad.addColorStop(0, 'rgba(239, 68, 68, 0.02)');
+    redGrad.addColorStop(1, 'rgba(239, 68, 68, 0.12)');
+    ctx.fillStyle = redGrad;
     ctx.fillRect(ml, zeroY, pw, mt + ph - zeroY);
 
-    // Grid lines
-    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    // --- Grid ---
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
     ctx.lineWidth = 0.5;
-    for (let lv = logCpdMin; lv <= logCpdMax; lv += 0.5) {
+    for (let lv = Math.floor(logCpdMin * 2) / 2; lv <= logCpdMax; lv += 0.25) {
         const x = toX(Math.pow(10, lv));
+        if (x < ml || x > ml + pw) continue;
         ctx.beginPath(); ctx.moveTo(x, mt); ctx.lineTo(x, mt + ph); ctx.stroke();
     }
     for (let dB = yMin; dB <= yMax; dB += 5) {
@@ -2147,127 +2245,164 @@ function renderCSFGraph(canvas, results) {
         ctx.beginPath(); ctx.moveTo(ml, y); ctx.lineTo(ml + pw, y); ctx.stroke();
     }
 
-    // Axes
-    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+    // --- Axes ---
+    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(ml, mt); ctx.lineTo(ml, mt + ph); ctx.lineTo(ml + pw, mt + ph);
     ctx.stroke();
 
-    // --- Average line (0 dB) ---
-    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([6, 4]);
+    // --- Average line ---
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([8, 5]);
     ctx.beginPath();
     ctx.moveTo(ml, zeroY); ctx.lineTo(ml + pw, zeroY);
     ctx.stroke();
     ctx.setLineDash([]);
 
     // "Average" label
-    ctx.fillStyle = 'rgba(255,255,255,0.4)';
-    ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.font = `10px ${font}`;
     ctx.textAlign = 'left';
-    ctx.fillText('Average', ml + pw + 4, zeroY + 3);
+    ctx.fillText('AVERAGE', ml + pw + 5, zeroY + 4);
 
-    // X-axis labels
-    ctx.fillStyle = 'rgba(255,255,255,0.7)';
-    ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-    ctx.textAlign = 'center';
-    for (let lv = logCpdMin; lv <= logCpdMax; lv += 0.5) {
-        const val = Math.pow(10, lv);
-        const x = toX(val);
-        ctx.fillText(val < 1 ? val.toFixed(2) : val.toFixed(1), x, mt + ph + 18);
-    }
-    ctx.fillText('Spatial Frequency (cpd)', ml + pw / 2, mt + ph + 42);
+    // --- Compute smooth spline through data ---
+    const dataPoints = normData.map(d => ({ x: toX(d.cpd), y: toY(d.dB) }));
+    const spline = catmullRomSpline(dataPoints, 20);
 
-    // Y-axis labels (dB)
-    ctx.textAlign = 'right';
-    for (let dB = yMin; dB <= yMax; dB += 5) {
-        const y = toY(dB);
-        const label = (dB > 0 ? '+' : '') + dB;
-        ctx.fillStyle = dB > 0 ? 'rgba(16, 185, 129, 0.7)'
-                      : dB < 0 ? 'rgba(239, 68, 68, 0.7)'
-                      : 'rgba(255,255,255,0.6)';
-        ctx.fillText(label, ml - 8, y + 4);
-    }
-    ctx.save();
-    ctx.translate(13, mt + ph / 2);
-    ctx.rotate(-Math.PI / 2);
-    ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(255,255,255,0.7)';
-    ctx.fillText('Deviation from Average (dB)', 0, 0);
-    ctx.restore();
-
-    // "Better" / "Worse" labels
-    ctx.font = '9px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillStyle = 'rgba(16, 185, 129, 0.5)';
-    ctx.fillText('BETTER', ml + 6, mt + 14);
-    ctx.fillStyle = 'rgba(239, 68, 68, 0.5)';
-    ctx.fillText('WORSE', ml + 6, mt + ph - 6);
-
-    // --- Fill area between patient line and zero line ---
-    // Above average (green)
+    // --- Gradient fill between spline and zero line ---
+    // Above (green)
     ctx.save();
     ctx.beginPath();
     ctx.rect(ml, mt, pw, zeroY - mt);
     ctx.clip();
-    ctx.fillStyle = 'rgba(16, 185, 129, 0.15)';
+    const greenFill = ctx.createLinearGradient(0, mt, 0, zeroY);
+    greenFill.addColorStop(0, 'rgba(52, 211, 153, 0.35)');
+    greenFill.addColorStop(1, 'rgba(52, 211, 153, 0.05)');
+    ctx.fillStyle = greenFill;
     ctx.beginPath();
-    ctx.moveTo(toX(normData[0].cpd), zeroY);
-    normData.forEach(d => ctx.lineTo(toX(d.cpd), toY(d.dB)));
-    ctx.lineTo(toX(normData[normData.length - 1].cpd), zeroY);
+    ctx.moveTo(spline[0].x, zeroY);
+    spline.forEach(p => ctx.lineTo(p.x, p.y));
+    ctx.lineTo(spline[spline.length - 1].x, zeroY);
     ctx.closePath();
     ctx.fill();
     ctx.restore();
 
-    // Below average (red)
+    // Below (red)
     ctx.save();
     ctx.beginPath();
     ctx.rect(ml, zeroY, pw, mt + ph - zeroY);
     ctx.clip();
-    ctx.fillStyle = 'rgba(239, 68, 68, 0.15)';
+    const redFill = ctx.createLinearGradient(0, zeroY, 0, mt + ph);
+    redFill.addColorStop(0, 'rgba(248, 113, 113, 0.05)');
+    redFill.addColorStop(1, 'rgba(248, 113, 113, 0.35)');
+    ctx.fillStyle = redFill;
     ctx.beginPath();
-    ctx.moveTo(toX(normData[0].cpd), zeroY);
-    normData.forEach(d => ctx.lineTo(toX(d.cpd), toY(d.dB)));
-    ctx.lineTo(toX(normData[normData.length - 1].cpd), zeroY);
+    ctx.moveTo(spline[0].x, zeroY);
+    spline.forEach(p => ctx.lineTo(p.x, p.y));
+    ctx.lineTo(spline[spline.length - 1].x, zeroY);
     ctx.closePath();
     ctx.fill();
     ctx.restore();
 
-    // Patient data line
-    ctx.strokeStyle = '#3b82f6';
+    // --- Glow under the spline curve ---
+    ctx.save();
+    ctx.shadowColor = 'rgba(59, 130, 246, 0.5)';
+    ctx.shadowBlur = 12;
+    ctx.strokeStyle = 'rgba(59, 130, 246, 0.3)';
+    ctx.lineWidth = 6;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    spline.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+    ctx.stroke();
+    ctx.restore();
+
+    // --- Main spline curve ---
+    const lineGrad = ctx.createLinearGradient(spline[0].x, 0, spline[spline.length - 1].x, 0);
+    lineGrad.addColorStop(0, '#60a5fa');
+    lineGrad.addColorStop(0.5, '#a78bfa');
+    lineGrad.addColorStop(1, '#818cf8');
+    ctx.strokeStyle = lineGrad;
     ctx.lineWidth = 2.5;
     ctx.lineJoin = 'round';
     ctx.beginPath();
-    normData.forEach((d, i) => {
-        const x = toX(d.cpd);
-        const y = toY(d.dB);
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-    });
+    spline.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
     ctx.stroke();
 
-    // Data points
+    // --- Data points with glow ---
     normData.forEach(d => {
         const x = toX(d.cpd);
         const y = toY(d.dB);
+        const color = d.dB >= 0 ? '#34d399' : '#f87171';
+        const glowColor = d.dB >= 0 ? 'rgba(52, 211, 153, 0.4)' : 'rgba(248, 113, 113, 0.4)';
+
+        // Glow
         ctx.beginPath();
-        ctx.arc(x, y, 5, 0, Math.PI * 2);
-        ctx.fillStyle = d.dB >= 0 ? '#10b981' : '#ef4444';
+        ctx.arc(x, y, 10, 0, Math.PI * 2);
+        ctx.fillStyle = glowColor;
         ctx.fill();
-        ctx.strokeStyle = 'white';
+
+        // Point
+        ctx.beginPath();
+        ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,0.8)';
         ctx.lineWidth = 1.5;
         ctx.stroke();
     });
 
-    // Snellen labels below x-axis
-    ctx.fillStyle = 'rgba(255,255,255,0.45)';
-    ctx.font = '9px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    // --- X-axis labels ---
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.font = `10px ${font}`;
     ctx.textAlign = 'center';
+    // Show labels at each data point's cpd
     normData.forEach(d => {
-        ctx.fillText(`20/${d.denom}`, toX(d.cpd), mt + ph + 30);
+        const x = toX(d.cpd);
+        const cpdLabel = d.cpd < 1 ? d.cpd.toFixed(2) : d.cpd.toFixed(1);
+        ctx.fillText(cpdLabel, x, mt + ph + 16);
     });
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.font = `9px ${font}`;
+    ctx.fillText('Spatial Frequency (cpd)', ml + pw / 2, mt + ph + 42);
+
+    // --- Snellen equivalents below cpd ---
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.font = `8px ${font}`;
+    normData.forEach(d => {
+        const x = toX(d.cpd);
+        const denomLabel = Number.isInteger(d.denom) ? d.denom : Math.round(d.denom);
+        ctx.fillText(`20/${denomLabel}`, x, mt + ph + 27);
+    });
+
+    // --- Y-axis labels ---
+    ctx.font = `10px ${font}`;
+    ctx.textAlign = 'right';
+    for (let dB = yMin; dB <= yMax; dB += 5) {
+        const y = toY(dB);
+        const label = (dB > 0 ? '+' : '') + dB;
+        ctx.fillStyle = dB > 0 ? 'rgba(52, 211, 153, 0.6)'
+                      : dB < 0 ? 'rgba(248, 113, 113, 0.6)'
+                      : 'rgba(255,255,255,0.5)';
+        ctx.fillText(label + ' dB', ml - 6, y + 3);
+    }
+    ctx.save();
+    ctx.translate(11, mt + ph / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.font = `9px ${font}`;
+    ctx.fillText('vs. Average', 0, 0);
+    ctx.restore();
+
+    // --- Better / Worse labels ---
+    ctx.font = `bold 9px ${font}`;
+    ctx.textAlign = 'right';
+    ctx.fillStyle = 'rgba(52, 211, 153, 0.35)';
+    ctx.fillText('BETTER \u25B2', ml + pw - 4, mt + 14);
+    ctx.fillStyle = 'rgba(248, 113, 113, 0.35)';
+    ctx.fillText('WORSE \u25BC', ml + pw - 4, mt + ph - 6);
 }
 
 function initLuminanceCalibration() {
