@@ -586,6 +586,7 @@ let contrastPercent = 100; // Weber contrast percentage
 // --- CSF Test State ---
 // Pass 1: coarse grid across the spatial frequency range
 const CSF_COARSE_LEVELS = [100, 70, 50, 40, 30, 25];
+const CSF_EXTENSION_LEVELS = [20, 15, 10]; // extended if patient is still performing well
 const CSF_LETTERS_PER_LINE = 8;
 const CSF_MIN_CONTRAST = 1.25; // Display floor %
 
@@ -1892,31 +1893,58 @@ function csfInterpolateThreshold(denom) {
 
 // Generate pass 2 levels: insert intermediate sizes where CSF changes fastest
 function csfGenerateRefinedLevels() {
-    const coarseResults = CSF_COARSE_LEVELS
-        .filter(d => csfState.results[d] && csfState.results[d].coarseThreshold != null)
-        .sort((a, b) => b - a); // descending (large letters first)
-    if (coarseResults.length < 2) return [...coarseResults];
+    // Include all tested levels (coarse + any extensions)
+    const allTested = Object.keys(csfState.results)
+        .map(Number)
+        .filter(d => csfState.results[d].coarseThreshold != null)
+        .sort((a, b) => b - a); // descending
+    if (allTested.length < 2) return [...allTested];
 
     const levels = [];
-    for (let i = 0; i < coarseResults.length; i++) {
-        levels.push(coarseResults[i]);
-        if (i < coarseResults.length - 1) {
-            const d1 = coarseResults[i];
-            const d2 = coarseResults[i + 1];
+    for (let i = 0; i < allTested.length; i++) {
+        levels.push(allTested[i]);
+        if (i < allTested.length - 1) {
+            const d1 = allTested[i];
+            const d2 = allTested[i + 1];
             const t1 = csfState.results[d1].coarseThreshold;
             const t2 = csfState.results[d2].coarseThreshold;
-            // Compute how much the CSF changed between these two levels (in log space)
             const deltaLog = Math.abs(Math.log10(t1) - Math.log10(t2));
-            // If the change is large (> 0.2 log units ≈ 60% change), insert a midpoint
             if (deltaLog > 0.2) {
-                const midDenom = Math.round(Math.sqrt(d1 * d2)); // geometric mean
+                const midDenom = Math.round(Math.sqrt(d1 * d2));
                 if (midDenom !== d1 && midDenom !== d2) {
                     levels.push(midDenom);
                 }
             }
         }
     }
-    return levels.sort((a, b) => b - a); // descending
+    return levels.sort((a, b) => b - a);
+}
+
+// Check if the patient is performing at or above average at the smallest tested level
+function csfShouldExtend() {
+    // Only extend during pass 1, and only if we haven't already added all extensions
+    const smallest = csfState.levels[csfState.levels.length - 1];
+    if (smallest <= CSF_EXTENSION_LEVELS[CSF_EXTENSION_LEVELS.length - 1]) return false;
+
+    const result = csfState.results[smallest];
+    if (!result || result.coarseThreshold == null) return false;
+
+    const cpd = 30 / smallest;
+    const sensitivity = 100 / result.coarseThreshold;
+    const norm = csfNormative(cpd);
+    const dB = 10 * Math.log10(Math.max(0.01, sensitivity) / norm);
+
+    // Extend if patient is within 3 dB of average (not significantly below)
+    return dB >= -3;
+}
+
+// Get the next extension level that hasn't been tested yet
+function csfNextExtensionLevel() {
+    const tested = new Set(csfState.levels);
+    for (const ext of CSF_EXTENSION_LEVELS) {
+        if (!tested.has(ext)) return ext;
+    }
+    return null;
 }
 
 function csfEstimateThreshold(contrasts, errors) {
@@ -2032,6 +2060,16 @@ function csfProcessResponse(errors) {
 
     if (csfState.levelIndex >= csfState.levels.length) {
         if (csfState.pass === 1) {
+            // Check if we should extend into 20/20, 20/15, 20/10
+            if (csfShouldExtend()) {
+                const nextExt = csfNextExtensionLevel();
+                if (nextExt != null) {
+                    csfState.levels.push(nextExt);
+                    // levelIndex already points to the new entry
+                    csfNextLine();
+                    return;
+                }
+            }
             // Generate refined levels with interpolated sizes where CSF changes most
             csfState.pass = 2;
             csfState.levels = csfGenerateRefinedLevels();
