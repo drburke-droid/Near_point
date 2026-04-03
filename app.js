@@ -2015,7 +2015,7 @@ function csfProcessResponse(errors) {
     const denom = csfState.levels[csfState.levelIndex];
     const threshold = csfEstimateThreshold(csfState.currentContrasts, errors);
 
-    // Store result
+    // Store result — pass 3 overwrites refined threshold for retested levels
     if (!csfState.results[denom]) {
         csfState.results[denom] = {};
     }
@@ -2038,7 +2038,7 @@ function csfProcessResponse(errors) {
             csfState.levelIndex = 0;
             csfNextLine();
         } else {
-            // Test complete
+            // Pass 2 or 3 done — run noise check (pass 3 goes straight to finalize)
             csfComplete();
         }
     } else {
@@ -2046,17 +2046,88 @@ function csfProcessResponse(errors) {
     }
 }
 
-function csfComplete() {
-    // Build final results from all tested levels, sorted by denom descending (large→small)
+function csfBuildResults() {
     const allDenoms = Object.keys(csfState.results).map(Number).sort((a, b) => b - a);
-    const finalResults = allDenoms.map(denom => {
+    return allDenoms.map(denom => {
         const r = csfState.results[denom];
         const threshold = r.refinedThreshold || r.coarseThreshold || 100;
         const cpd = 30 / denom;
         const sensitivity = 100 / threshold;
         return { denom, cpd, threshold, sensitivity };
     });
+}
 
+// Detect noisy regions: places where normalized dB reverses direction unexpectedly
+// Returns array of denoms that need retesting, or empty if clean
+function csfDetectNoisyRegions(results) {
+    if (results.length < 3) return [];
+
+    // Compute normalized dB for each point
+    const withDB = results.map(r => {
+        const norm = csfNormative(r.cpd);
+        const dB = 10 * Math.log10(Math.max(0.01, r.sensitivity) / norm);
+        return { ...r, dB };
+    });
+
+    const suspicious = [];
+    // Look for sign reversals: point flanked by neighbors that are both above or both below it
+    for (let i = 1; i < withDB.length - 1; i++) {
+        const prev = withDB[i - 1].dB;
+        const curr = withDB[i].dB;
+        const next = withDB[i + 1].dB;
+
+        // Is this point a local outlier? (both neighbors on the same side, and the deviation is meaningful)
+        const avgNeighbors = (prev + next) / 2;
+        const deviation = Math.abs(curr - avgNeighbors);
+        if (deviation > 3) { // > 3 dB swing from neighbors' average
+            suspicious.push(withDB[i].denom);
+            // Also retest neighbors for confirmation
+            suspicious.push(withDB[i - 1].denom);
+            suspicious.push(withDB[i + 1].denom);
+        }
+    }
+
+    // Deduplicate
+    return [...new Set(suspicious)].sort((a, b) => b - a);
+}
+
+function csfComplete() {
+    const finalResults = csfBuildResults();
+
+    // After pass 2, check for noise before finalizing
+    if (csfState.pass === 2) {
+        const noisyDenoms = csfDetectNoisyRegions(finalResults);
+        if (noisyDenoms.length > 0) {
+            // Suggest pass 3 to clinician — don't auto-start
+            csfBroadcast('csf-suggest-pass3', {
+                results: finalResults,
+                noisyDenoms: noisyDenoms
+            });
+            // Stay active, waiting for clinician decision
+            csfState.waitingForClinician = true;
+            return;
+        }
+    }
+
+    // No noise (or pass 3 already done) — finalize
+    csfFinalize(finalResults);
+}
+
+function csfStartPass3(denoms) {
+    csfState.pass = 3;
+    csfState.levels = denoms.sort((a, b) => b - a);
+    csfState.levelIndex = 0;
+
+    // Update indicator
+    const indicator = $('#snellen-indicator');
+    if (indicator) {
+        indicator.style.background = 'linear-gradient(135deg, #8b5cf6, #6d28d9)';
+    }
+
+    csfNextLine();
+}
+
+function csfFinalize(finalResults) {
     // Broadcast to clinician
     csfBroadcast('csf-complete', { results: finalResults });
 
@@ -2073,6 +2144,16 @@ function csfHandleClinicianMessage(data) {
         case 'csf-response':
             if (csfState.active && csfState.waitingForClinician) {
                 csfProcessResponse(data.errors);
+            }
+            break;
+        case 'csf-accept-pass3':
+            if (csfState.active && data.denoms) {
+                csfStartPass3(data.denoms);
+            }
+            break;
+        case 'csf-decline-pass3':
+            if (csfState.active) {
+                csfFinalize(csfBuildResults());
             }
             break;
         case 'csf-abort':

@@ -284,6 +284,71 @@
 
         .hidden { display: none !important; }
 
+        /* Pass 3 suggestion */
+        .pass3-card {
+            text-align: center;
+            padding: 8px 0;
+        }
+
+        .pass3-icon {
+            margin-bottom: 12px;
+        }
+
+        .pass3-card h3 {
+            font-size: 1rem;
+            font-weight: 700;
+            color: #c4b5fd;
+            margin-bottom: 8px;
+        }
+
+        .pass3-card p {
+            font-size: 0.85rem;
+            color: rgba(255,255,255,0.6);
+            line-height: 1.5;
+            margin-bottom: 16px;
+        }
+
+        .pass3-card p strong {
+            color: #a78bfa;
+        }
+
+        .pass3-preview {
+            height: 200px;
+            margin-bottom: 16px;
+        }
+
+        .pass3-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .pass3-actions .btn-next {
+            background: linear-gradient(135deg, #8b5cf6, #6d28d9);
+        }
+
+        .pass3-actions .btn-next:hover {
+            box-shadow: 0 8px 24px rgba(139, 92, 246, 0.3);
+        }
+
+        .btn-decline {
+            padding: 12px 20px;
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 12px;
+            background: rgba(255,255,255,0.04);
+            color: rgba(255,255,255,0.5);
+            font-family: inherit;
+            font-size: 0.85rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-decline:hover {
+            background: rgba(255,255,255,0.08);
+            color: rgba(255,255,255,0.7);
+        }
+
         /* Results section */
         .results-section {
             margin-top: 32px;
@@ -355,6 +420,26 @@
             <div class="controls">
                 <button class="btn-next" id="btn-next">Next Line</button>
                 <button class="btn-abort" id="btn-abort">Cancel</button>
+            </div>
+        </div>
+
+        <!-- Pass 3 suggestion panel -->
+        <div id="pass3-panel" class="hidden">
+            <div class="pass3-card">
+                <div class="pass3-icon">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"/>
+                        <line x1="12" y1="8" x2="12" y2="12"/>
+                        <line x1="12" y1="16" x2="12.01" y2="16"/>
+                    </svg>
+                </div>
+                <h3>Inconsistency Detected</h3>
+                <p>The results show unexpected variation at <strong id="pass3-count">0</strong> levels (<span id="pass3-levels"></span>). A targeted third pass on just these levels would improve confidence.</p>
+                <canvas class="csf-graph-canvas pass3-preview" id="pass3-graph"></canvas>
+                <div class="pass3-actions">
+                    <button class="btn-next" id="btn-accept-pass3">Run Pass 3</button>
+                    <button class="btn-decline" id="btn-decline-pass3">Skip — Use Current Results</button>
+                </div>
             </div>
         </div>
 

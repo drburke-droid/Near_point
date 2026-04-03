@@ -20,11 +20,14 @@ const lettersGrid = $('#letters-grid');
 const progressFill = $('#progress-fill');
 const btnNext = $('#btn-next');
 const btnAbort = $('#btn-abort');
+const pass3Panel = $('#pass3-panel');
 
 // --- Notify patient display that clinician is ready ---
 channel.postMessage({ type: 'clinician-ready' });
 
 // --- Message handler ---
+let pendingPass3Denoms = null; // stash noisy denoms while clinician decides
+
 channel.onmessage = (e) => {
     const data = e.data;
     switch (data.type) {
@@ -33,6 +36,9 @@ channel.onmessage = (e) => {
             break;
         case 'csf-complete':
             showResults(data.results);
+            break;
+        case 'csf-suggest-pass3':
+            showPass3Suggestion(data.results, data.noisyDenoms);
             break;
         case 'csf-cancel':
             showCancelled();
@@ -183,6 +189,23 @@ btnAbort.addEventListener('click', () => {
     showCancelled();
 });
 
+// --- Pass 3 decision ---
+$('#btn-accept-pass3').addEventListener('click', () => {
+    if (pendingPass3Denoms) {
+        pass3Panel.classList.add('hidden');
+        testPanel.classList.remove('hidden');
+        channel.postMessage({ type: 'csf-accept-pass3', denoms: pendingPass3Denoms });
+        pendingPass3Denoms = null;
+    }
+});
+
+$('#btn-decline-pass3').addEventListener('click', () => {
+    pass3Panel.classList.add('hidden');
+    channel.postMessage({ type: 'csf-decline-pass3' });
+    pendingPass3Denoms = null;
+    // Results will come back via csf-complete
+});
+
 // --- Show results ---
 function showResults(results) {
     testComplete = true;
@@ -218,11 +241,36 @@ function showResults(results) {
 function showCancelled() {
     testPanel.classList.add('hidden');
     resultsPanel.classList.add('hidden');
+    pass3Panel.classList.add('hidden');
     waitingPanel.classList.remove('hidden');
     waitingPanel.querySelector('h2').textContent = 'Test cancelled';
     waitingPanel.querySelector('p').textContent = 'The CSF test was stopped.';
     statusBadge.textContent = 'Cancelled';
     statusBadge.className = 'status-badge';
+}
+
+function showPass3Suggestion(results, noisyDenoms) {
+    pendingPass3Denoms = noisyDenoms;
+
+    testPanel.classList.add('hidden');
+    waitingPanel.classList.add('hidden');
+    resultsPanel.classList.add('hidden');
+    pass3Panel.classList.remove('hidden');
+
+    statusBadge.textContent = 'Review';
+    statusBadge.className = 'status-badge';
+    statusBadge.style.background = 'linear-gradient(135deg, #8b5cf6, #6d28d9)';
+
+    // Show which levels are noisy
+    const denomList = noisyDenoms
+        .map(d => `20/${Number.isInteger(d) ? d : Math.round(d)}`)
+        .join(', ');
+    $('#pass3-levels').textContent = denomList;
+    $('#pass3-count').textContent = noisyDenoms.length;
+
+    // Render the current (potentially noisy) graph so clinician can see the issue
+    const canvas = $('#pass3-graph');
+    renderCSFGraph(canvas, results);
 }
 
 // ==========================================
