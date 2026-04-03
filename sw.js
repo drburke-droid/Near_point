@@ -1,4 +1,4 @@
-const CACHE_NAME = 'nearpoint-v4';
+const CACHE_NAME = 'nearpoint-v5';
 const ASSETS = [
     './',
     './index.html',

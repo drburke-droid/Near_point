@@ -8,6 +8,84 @@ let currentLine = null;   // { snellenDenom, letters, contrasts, pass, levelInde
 let errors = [];          // [0,0,1,0,...] per letter
 let testComplete = false;
 let markMode = 'wrong';   // 'wrong' = mark incorrect (default), 'correct' = mark correct
+let lastCompletedResults = null; // stashed after test completes
+let activePatientId = null;
+let activePatient = null;        // { id, name, email }
+
+// ==========================================
+// Patient Database (IndexedDB)
+// ==========================================
+
+const PatientDB = {
+    db: null,
+    open() {
+        return new Promise((resolve, reject) => {
+            const req = indexedDB.open('nearpoint-db', 1);
+            req.onupgradeneeded = (e) => {
+                const db = e.target.result;
+                if (!db.objectStoreNames.contains('patients')) {
+                    const ps = db.createObjectStore('patients', { keyPath: 'id', autoIncrement: true });
+                    ps.createIndex('name', 'name', { unique: false });
+                }
+                if (!db.objectStoreNames.contains('csfResults')) {
+                    const rs = db.createObjectStore('csfResults', { keyPath: 'id', autoIncrement: true });
+                    rs.createIndex('patientId', 'patientId', { unique: false });
+                    rs.createIndex('date', 'date', { unique: false });
+                }
+            };
+            req.onsuccess = (e) => { this.db = e.target.result; resolve(); };
+            req.onerror = (e) => reject(e.target.error);
+        });
+    },
+    _store(name, mode) { return this.db.transaction(name, mode).objectStore(name); },
+    addPatient(name, email) {
+        return new Promise((resolve, reject) => {
+            const req = this._store('patients', 'readwrite').add({ name, email, createdAt: Date.now() });
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = (e) => reject(e.target.error);
+        });
+    },
+    getPatients() {
+        return new Promise((resolve, reject) => {
+            const req = this._store('patients', 'readonly').getAll();
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = (e) => reject(e.target.error);
+        });
+    },
+    getPatient(id) {
+        return new Promise((resolve, reject) => {
+            const req = this._store('patients', 'readonly').get(id);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = (e) => reject(e.target.error);
+        });
+    },
+    saveCSFResult(patientId, results, graphDataURL) {
+        return new Promise((resolve, reject) => {
+            const req = this._store('csfResults', 'readwrite').add({
+                patientId, date: Date.now(), results, graphDataURL
+            });
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = (e) => reject(e.target.error);
+        });
+    },
+    getPatientResults(patientId) {
+        return new Promise((resolve, reject) => {
+            const idx = this._store('csfResults', 'readonly').index('patientId');
+            const req = idx.getAll(patientId);
+            req.onsuccess = () => resolve(req.result.sort((a, b) => b.date - a.date));
+            req.onerror = (e) => reject(e.target.error);
+        });
+    },
+    deleteResult(resultId) {
+        return new Promise((resolve, reject) => {
+            const req = this._store('csfResults', 'readwrite').delete(resultId);
+            req.onsuccess = () => resolve();
+            req.onerror = (e) => reject(e.target.error);
+        });
+    }
+};
+
+PatientDB.open().catch(err => console.error('PatientDB init failed:', err));
 
 // --- DOM refs ---
 const $ = (sel) => document.querySelector(sel);
@@ -203,6 +281,7 @@ $('#btn-decline-pass3').addEventListener('click', () => {
 // --- Show results ---
 function showResults(results) {
     testComplete = true;
+    lastCompletedResults = results;
     testPanel.classList.add('hidden');
     waitingPanel.classList.add('hidden');
     resultsPanel.classList.remove('hidden');
@@ -211,6 +290,10 @@ function showResults(results) {
     statusBadge.className = 'status-badge complete';
 
     progressFill.style.width = '100%';
+
+    // Enable save button
+    const saveBtn = $('#btn-save-results');
+    if (saveBtn) saveBtn.disabled = false;
 
     // Populate table
     const tbody = $('#results-tbody');
@@ -492,3 +575,267 @@ function renderCSFGraph(canvas, results) {
     ctx.fillStyle = 'rgba(248,113,113,0.35)';
     ctx.fillText('WORSE \u25BC', ml + pw - 4, mt + ph - 6);
 }
+
+// ==========================================
+// Patient Drawer & Database UI
+// ==========================================
+
+function showToast(msg) {
+    const toast = $('#toast');
+    toast.textContent = msg;
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 2200);
+}
+
+function openDrawer() {
+    const drawer = $('#patient-drawer');
+    const backdrop = $('#patient-drawer-backdrop');
+    drawer.classList.remove('hidden');
+    backdrop.classList.remove('hidden');
+    // Trigger transition
+    requestAnimationFrame(() => drawer.classList.add('open'));
+    refreshPatientList();
+}
+
+function closeDrawer() {
+    const drawer = $('#patient-drawer');
+    const backdrop = $('#patient-drawer-backdrop');
+    drawer.classList.remove('open');
+    setTimeout(() => {
+        drawer.classList.add('hidden');
+        backdrop.classList.add('hidden');
+    }, 250);
+}
+
+async function refreshPatientList(filter) {
+    const list = $('#patient-list');
+    const patients = filter
+        ? await PatientDB.getPatients().then(ps => {
+            const q = filter.toLowerCase();
+            return ps.filter(p => p.name.toLowerCase().includes(q) || (p.email || '').toLowerCase().includes(q));
+        })
+        : await PatientDB.getPatients();
+
+    list.innerHTML = '';
+
+    if ($('#patient-search').value.trim() && patients.length === 0) {
+        // Show "create new" option
+        $('#new-patient-form').classList.remove('hidden');
+        $('#new-patient-name').value = $('#patient-search').value.trim();
+        $('#new-patient-name').focus();
+    } else {
+        $('#new-patient-form').classList.add('hidden');
+    }
+
+    patients.forEach(p => {
+        const item = document.createElement('div');
+        item.className = 'patient-item';
+        item.innerHTML = `
+            <div>
+                <div class="patient-item-name">${p.name}</div>
+                <div class="patient-item-email">${p.email || ''}</div>
+            </div>
+        `;
+        item.addEventListener('click', () => selectPatient(p));
+        list.appendChild(item);
+    });
+
+    // Add "create new" button at bottom
+    const addItem = document.createElement('div');
+    addItem.className = 'patient-item';
+    addItem.innerHTML = '<div class="patient-item-add">+ New Patient</div>';
+    addItem.addEventListener('click', () => {
+        $('#new-patient-form').classList.remove('hidden');
+        $('#new-patient-name').value = '';
+        $('#new-patient-email').value = '';
+        $('#new-patient-name').focus();
+    });
+    list.appendChild(addItem);
+}
+
+function selectPatient(patient) {
+    activePatientId = patient.id;
+    activePatient = patient;
+
+    const section = $('#active-patient-section');
+    section.classList.remove('hidden');
+    $('#active-patient-card').innerHTML = `
+        <div class="ap-name">${patient.name}</div>
+        <div class="ap-email">${patient.email || 'No email'}</div>
+    `;
+
+    refreshHistory();
+}
+
+async function refreshHistory() {
+    const container = $('#patient-history');
+    container.innerHTML = '';
+
+    if (!activePatientId) return;
+    const results = await PatientDB.getPatientResults(activePatientId);
+
+    if (results.length === 0) {
+        container.innerHTML = '<div style="color:rgba(255,255,255,0.3); font-size:0.8rem; padding:8px 0">No test history</div>';
+        return;
+    }
+
+    results.forEach(r => {
+        const date = new Date(r.date);
+        const dateStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+        const timeStr = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+        const levels = r.results ? r.results.length : 0;
+
+        const item = document.createElement('div');
+        item.className = 'history-item';
+        item.innerHTML = `
+            <div>
+                <div class="history-date">${dateStr} ${timeStr}</div>
+                <div class="history-summary">${levels} levels tested</div>
+            </div>
+            <div class="history-actions">
+                <button class="history-btn" data-action="view" data-id="${r.id}">View</button>
+                <button class="history-btn" data-action="copy" data-id="${r.id}">Copy</button>
+                <button class="history-btn history-btn-del" data-action="delete" data-id="${r.id}">Del</button>
+            </div>
+        `;
+
+        // View: render saved graph
+        item.querySelector('[data-action="view"]').addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (r.results) {
+                showResults(r.results);
+            } else if (r.graphDataURL) {
+                showToast('Graph-only record (legacy)');
+            }
+        });
+
+        // Copy
+        item.querySelector('[data-action="copy"]').addEventListener('click', (e) => {
+            e.stopPropagation();
+            copyResultsToClipboard(r.results, activePatient, new Date(r.date));
+        });
+
+        // Delete
+        item.querySelector('[data-action="delete"]').addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await PatientDB.deleteResult(r.id);
+            refreshHistory();
+            showToast('Result deleted');
+        });
+
+        container.appendChild(item);
+    });
+}
+
+async function saveCurrentResults() {
+    if (!lastCompletedResults) {
+        showToast('No results to save');
+        return;
+    }
+
+    if (!activePatientId) {
+        openDrawer();
+        showToast('Select or create a patient first');
+        return;
+    }
+
+    // Get graph as data URL
+    const canvas = $('#csf-graph');
+    let graphDataURL = '';
+    try { graphDataURL = canvas.toDataURL('image/png'); } catch (e) { /* ok */ }
+
+    await PatientDB.saveCSFResult(activePatientId, lastCompletedResults, graphDataURL);
+    showToast(`Saved to ${activePatient.name}`);
+    $('#btn-save-results').disabled = true;
+    refreshHistory();
+}
+
+function copyResultsToClipboard(results, patient, date) {
+    if (!results) { showToast('No results to copy'); return; }
+
+    const patientName = patient ? patient.name : 'Unknown';
+    const patientEmail = patient ? (patient.email || '') : '';
+    const dateStr = (date || new Date()).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
+
+    // Build text version
+    let text = `CSF Test Results \u2014 ${patientName}\n`;
+    text += `Date: ${dateStr}\n`;
+    if (patientEmail) text += `Email: ${patientEmail}\n`;
+    text += `\nSnellen  | cpd   | Threshold | Sensitivity | vs. Avg\n`;
+    text += `---------|-------|-----------|-------------|--------\n`;
+
+    results.forEach(r => {
+        const denomLabel = Number.isInteger(r.denom) ? r.denom : Math.round(r.denom);
+        const norm = csfNormative(r.cpd);
+        const dB = 10 * Math.log10(Math.max(0.01, r.sensitivity) / norm);
+        const dBStr = (dB >= 0 ? '+' : '') + dB.toFixed(1) + ' dB';
+        const threshStr = r.threshold < 10 ? r.threshold.toFixed(1) + '%' : Math.round(r.threshold) + '%';
+        text += `20/${String(denomLabel).padEnd(5)} | ${r.cpd.toFixed(2).padEnd(5)} | ${threshStr.padEnd(9)} | ${r.sensitivity.toFixed(1).padEnd(11)} | ${dBStr}\n`;
+    });
+
+    // Build HTML version with embedded graph
+    const canvas = $('#csf-graph');
+    let imgTag = '';
+    try {
+        const dataURL = canvas.toDataURL('image/png');
+        imgTag = `<br><img src="${dataURL}" alt="CSF Graph" style="max-width:600px;border-radius:8px;">`;
+    } catch (e) { /* ok */ }
+
+    const htmlRows = results.map(r => {
+        const denomLabel = Number.isInteger(r.denom) ? r.denom : Math.round(r.denom);
+        const norm = csfNormative(r.cpd);
+        const dB = 10 * Math.log10(Math.max(0.01, r.sensitivity) / norm);
+        const dBStr = (dB >= 0 ? '+' : '') + dB.toFixed(1) + ' dB';
+        const threshStr = r.threshold < 10 ? r.threshold.toFixed(1) + '%' : Math.round(r.threshold) + '%';
+        return `<tr><td>20/${denomLabel}</td><td>${r.cpd.toFixed(2)}</td><td>${threshStr}</td><td>${r.sensitivity.toFixed(1)}</td><td>${dBStr}</td></tr>`;
+    }).join('');
+
+    const html = `<h3>CSF Test Results \u2014 ${patientName}</h3>
+<p>Date: ${dateStr}${patientEmail ? '<br>Email: ' + patientEmail : ''}</p>
+<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:sans-serif;font-size:13px">
+<tr style="background:#f0f0f0"><th>Snellen</th><th>cpd</th><th>Threshold</th><th>Sensitivity</th><th>vs. Avg</th></tr>
+${htmlRows}
+</table>
+${imgTag}`;
+
+    // Write both text and HTML to clipboard
+    try {
+        const blob = new Blob([html], { type: 'text/html' });
+        const textBlob = new Blob([text], { type: 'text/plain' });
+        navigator.clipboard.write([
+            new ClipboardItem({ 'text/html': blob, 'text/plain': textBlob })
+        ]).then(() => showToast('Copied to clipboard'));
+    } catch (e) {
+        // Fallback: text only
+        navigator.clipboard.writeText(text).then(() => showToast('Copied (text only)'));
+    }
+}
+
+// --- Event listeners ---
+$('#btn-db').addEventListener('click', openDrawer);
+$('#drawer-close').addEventListener('click', closeDrawer);
+$('#patient-drawer-backdrop').addEventListener('click', closeDrawer);
+
+$('#patient-search').addEventListener('input', () => {
+    const q = $('#patient-search').value.trim();
+    refreshPatientList(q || undefined);
+});
+
+$('#btn-create-patient').addEventListener('click', async () => {
+    const name = $('#new-patient-name').value.trim();
+    const email = $('#new-patient-email').value.trim();
+    if (!name) return;
+    const id = await PatientDB.addPatient(name, email);
+    const patient = await PatientDB.getPatient(id);
+    selectPatient(patient);
+    $('#new-patient-form').classList.add('hidden');
+    $('#patient-search').value = '';
+    refreshPatientList();
+    showToast(`Created ${name}`);
+});
+
+$('#btn-save-results').addEventListener('click', saveCurrentResults);
+
+$('#btn-copy-results').addEventListener('click', () => {
+    copyResultsToClipboard(lastCompletedResults, activePatient, new Date());
+});

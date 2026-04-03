@@ -384,12 +384,316 @@
             border-radius: 8px;
             background: rgba(0,0,0,0.3);
         }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .btn-db {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 8px;
+            background: rgba(255,255,255,0.06);
+            color: rgba(255,255,255,0.7);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-db:hover {
+            background: rgba(255,255,255,0.12);
+            color: white;
+        }
+
+        .results-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 16px;
+        }
+
+        .btn-save {
+            background: linear-gradient(135deg, #10b981, #059669);
+        }
+
+        .btn-save:hover {
+            box-shadow: 0 8px 24px rgba(16, 185, 129, 0.3);
+        }
+
+        .btn-save:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            box-shadow: none;
+            transform: none;
+        }
+
+        /* Patient Drawer */
+        .drawer-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.4);
+            z-index: 90;
+        }
+
+        .drawer-backdrop.hidden { display: none; }
+
+        .patient-drawer {
+            position: fixed;
+            top: 0;
+            right: 0;
+            width: 340px;
+            max-width: 90vw;
+            height: 100vh;
+            background: #0d1a2d;
+            border-left: 1px solid rgba(255,255,255,0.08);
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            transform: translateX(100%);
+            transition: transform 0.25s ease;
+        }
+
+        .patient-drawer.open {
+            transform: translateX(0);
+        }
+
+        .patient-drawer.hidden { display: none; }
+
+        .drawer-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+        }
+
+        .drawer-header h2 {
+            font-size: 0.95rem;
+            font-weight: 700;
+        }
+
+        .drawer-close {
+            background: none;
+            border: none;
+            color: rgba(255,255,255,0.5);
+            font-size: 1.4rem;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 6px;
+            transition: all 0.15s;
+        }
+
+        .drawer-close:hover {
+            color: white;
+            background: rgba(255,255,255,0.1);
+        }
+
+        .drawer-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px 20px;
+        }
+
+        .drawer-search input {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            background: rgba(255,255,255,0.05);
+            color: white;
+            font-family: inherit;
+            font-size: 0.85rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .drawer-search input:focus {
+            border-color: rgba(0, 184, 212, 0.4);
+        }
+
+        .drawer-search input::placeholder {
+            color: rgba(255,255,255,0.3);
+        }
+
+        .patient-list {
+            margin-top: 8px;
+        }
+
+        .patient-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.15s;
+            margin-bottom: 2px;
+        }
+
+        .patient-item:hover {
+            background: rgba(255,255,255,0.06);
+        }
+
+        .patient-item-name {
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+
+        .patient-item-email {
+            font-size: 0.7rem;
+            color: rgba(255,255,255,0.35);
+        }
+
+        .patient-item-add {
+            color: var(--cyan-500);
+            font-weight: 600;
+            font-size: 0.8rem;
+        }
+
+        .new-patient-form {
+            margin-top: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .new-patient-form input {
+            padding: 10px 14px;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            background: rgba(255,255,255,0.05);
+            color: white;
+            font-family: inherit;
+            font-size: 0.85rem;
+            outline: none;
+        }
+
+        .new-patient-form input::placeholder {
+            color: rgba(255,255,255,0.3);
+        }
+
+        .btn-create-patient {
+            font-size: 0.85rem;
+            padding: 10px 16px;
+        }
+
+        .active-patient-section {
+            margin-top: 20px;
+        }
+
+        .active-patient-card {
+            padding: 12px 14px;
+            background: rgba(0, 184, 212, 0.08);
+            border: 1px solid rgba(0, 184, 212, 0.2);
+            border-radius: 8px;
+        }
+
+        .active-patient-card .ap-name {
+            font-weight: 700;
+            font-size: 0.9rem;
+        }
+
+        .active-patient-card .ap-email {
+            font-size: 0.75rem;
+            color: rgba(255,255,255,0.4);
+            margin-top: 2px;
+        }
+
+        .patient-history {
+            margin-top: 8px;
+        }
+
+        .history-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.15s;
+            margin-bottom: 2px;
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .history-item:hover {
+            background: rgba(255,255,255,0.06);
+        }
+
+        .history-date {
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .history-summary {
+            font-size: 0.7rem;
+            color: rgba(255,255,255,0.35);
+        }
+
+        .history-actions {
+            display: flex;
+            gap: 6px;
+        }
+
+        .history-btn {
+            background: none;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 6px;
+            color: rgba(255,255,255,0.5);
+            padding: 4px 8px;
+            font-size: 0.65rem;
+            cursor: pointer;
+            transition: all 0.15s;
+            font-family: inherit;
+        }
+
+        .history-btn:hover {
+            background: rgba(255,255,255,0.08);
+            color: white;
+        }
+
+        .history-btn-del:hover {
+            border-color: rgba(239, 68, 68, 0.4);
+            color: #f87171;
+        }
+
+        .copy-toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(60px);
+            background: rgba(16, 185, 129, 0.9);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            z-index: 200;
+            transition: transform 0.3s ease;
+            pointer-events: none;
+        }
+
+        .copy-toast.show {
+            transform: translateX(-50%) translateY(0);
+        }
     </style>
 </head>
 <body>
     <div class="header">
         <h1>CSF Test — Clinician</h1>
-        <div class="status-badge waiting" id="status-badge">Connecting...</div>
+        <div class="header-right">
+            <div class="status-badge waiting" id="status-badge">Connecting...</div>
+            <button class="btn-db" id="btn-db" title="Patient records">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                    <circle cx="12" cy="7" r="4"/>
+                </svg>
+            </button>
+        </div>
     </div>
 
     <div class="main">
@@ -458,9 +762,47 @@
                 <tbody id="results-tbody"></tbody>
             </table>
             <canvas class="csf-graph-canvas" id="csf-graph"></canvas>
+            <div class="results-actions">
+                <button class="btn-next btn-save" id="btn-save-results">Save to Patient</button>
+                <button class="btn-decline" id="btn-copy-results">Copy Results to Clipboard</button>
+            </div>
         </div>
     </div>
 
+    <!-- Patient drawer -->
+    <div id="patient-drawer-backdrop" class="drawer-backdrop hidden"></div>
+    <div id="patient-drawer" class="patient-drawer hidden">
+        <div class="drawer-header">
+            <h2>Patient Records</h2>
+            <button id="drawer-close" class="drawer-close">&times;</button>
+        </div>
+
+        <div class="drawer-body">
+            <!-- Search / Create -->
+            <div class="drawer-search">
+                <input type="text" id="patient-search" placeholder="Search or add patient..." autocomplete="off">
+            </div>
+            <div id="patient-list" class="patient-list"></div>
+
+            <!-- New patient form (hidden until needed) -->
+            <div id="new-patient-form" class="new-patient-form hidden">
+                <input type="text" id="new-patient-name" placeholder="Name">
+                <input type="email" id="new-patient-email" placeholder="Email">
+                <button class="btn-next btn-create-patient" id="btn-create-patient">Create Patient</button>
+            </div>
+
+            <!-- Active patient section -->
+            <div id="active-patient-section" class="active-patient-section hidden">
+                <div class="section-label">Active Patient</div>
+                <div class="active-patient-card" id="active-patient-card"></div>
+
+                <div class="section-label" style="margin-top:16px">History</div>
+                <div id="patient-history" class="patient-history"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="copy-toast" id="toast"></div>
     <script src="clinician.js"></script>
 </body>
 </html>
