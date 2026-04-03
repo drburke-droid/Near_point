@@ -583,6 +583,23 @@ let blLogmarIndex = 7; // index into LOGMAR_LEVELS, starts at LogMAR 0.3 (≈20/
 let blLetters = [];
 let contrastPercent = 100; // Weber contrast percentage
 
+// --- CSF Test State ---
+const CSF_LEVELS = [100, 70, 50, 40, 30, 25]; // Snellen denominators to test
+const CSF_LETTERS_PER_LINE = 8;
+const CSF_MIN_CONTRAST = 1.25; // Display floor %
+
+const csfState = {
+    active: false,
+    pass: 1,            // 1 = coarse, 2 = refined
+    levelIndex: 0,
+    currentLetters: [],
+    currentContrasts: [],
+    results: {},        // keyed by snellenDenom: { coarseThreshold, refinedThreshold }
+    channel: null,
+    clinicianWindow: null,
+    waitingForClinician: false
+};
+
 // --- Font Metrics Cache ---
 const fontXHeightRatios = {};
 
@@ -1147,6 +1164,14 @@ function setupTestScreen() {
         renderDistanceTest();
     });
 
+    // --- CSF Test ---
+    $('#csf-start-btn').addEventListener('click', () => csfStartTest());
+    $('#csf-stop-btn').addEventListener('click', () => csfStopTest());
+    $('#csf-results-close').addEventListener('click', () => csfClosePatientResults());
+    $('#csf-results-overlay').addEventListener('click', (e) => {
+        if (e.target === $('#csf-results-overlay')) csfClosePatientResults();
+    });
+
     // --- Luminance calibration ---
     initLuminanceCalibration();
 
@@ -1688,8 +1713,18 @@ function renderDistanceTest() {
     const distMM = unit === 'ft' ? sliderVal * 304.8 : sliderVal * 1000;
 
     let letterHeightMM, indicatorText, currentLetters;
+    let perLetterContrasts = null; // null = uniform, array = CSF mode
 
-    if (baileyLovieMode) {
+    if (csfState.active) {
+        // CSF mode: use current level's Snellen denominator
+        const snellenDenom = CSF_LEVELS[csfState.levelIndex] || CSF_LEVELS[CSF_LEVELS.length - 1];
+        const arcminTotal = 5 * snellenDenom / 20;
+        const radians = arcminTotal * Math.PI / (180 * 60);
+        letterHeightMM = distMM * Math.tan(radians);
+        indicatorText = `CSF Pass ${csfState.pass} — 20/${snellenDenom}`;
+        currentLetters = csfState.currentLetters;
+        perLetterContrasts = csfState.currentContrasts;
+    } else if (baileyLovieMode) {
         // Bailey-Lovie: LogMAR progression
         const logmar = LOGMAR_LEVELS[blLogmarIndex];
         const snellenDenom = 20 * Math.pow(10, logmar);
@@ -1740,12 +1775,18 @@ function renderDistanceTest() {
     container.style.fontSize = cssFontSize + 'px';
     container.style.fontFamily = optFont;
     container.style.transform = mirror ? 'scaleX(-1)' : 'none';
-    container.style.color = letterColor;
+    if (!perLetterContrasts) {
+        container.style.color = letterColor;
+    }
 
-    currentLetters.forEach(letter => {
+    currentLetters.forEach((letter, i) => {
         const span = document.createElement('span');
         span.className = 'snellen-letter';
         span.textContent = letter;
+        if (perLetterContrasts && perLetterContrasts[i] != null) {
+            const g = Math.round(255 * (1 - perLetterContrasts[i] / 100));
+            span.style.color = `rgb(${g}, ${g}, ${g})`;
+        }
         container.appendChild(span);
     });
 }
@@ -1758,6 +1799,469 @@ function updateContrastSlider() {
         : contrastPercent <= 10
         ? contrastPercent.toFixed(1) + '%'
         : Math.round(contrastPercent) + '%';
+}
+
+// ==========================================
+// CSF TEST ALGORITHM
+// ==========================================
+
+function csfPickLetters(count) {
+    const letters = [];
+    for (let i = 0; i < count; i++) {
+        letters.push(SLOAN_LETTERS[Math.floor(Math.random() * SLOAN_LETTERS.length)]);
+    }
+    return letters;
+}
+
+function csfComputeContrasts(startContrast, endContrast, count) {
+    // Geometric step-down from startContrast to endContrast across count letters
+    const clamped_start = Math.min(100, Math.max(CSF_MIN_CONTRAST, startContrast));
+    const clamped_end = Math.max(CSF_MIN_CONTRAST, endContrast);
+    const contrasts = [];
+    if (count <= 1) return [clamped_start];
+    const ratio = Math.pow(clamped_end / clamped_start, 1 / (count - 1));
+    for (let i = 0; i < count; i++) {
+        contrasts.push(Math.max(CSF_MIN_CONTRAST, clamped_start * Math.pow(ratio, i)));
+    }
+    return contrasts;
+}
+
+function csfAdaptiveStart(levelIndex) {
+    if (levelIndex === 0) return 100;
+    // Use previous level's threshold to adapt starting contrast
+    const prevDenom = CSF_LEVELS[levelIndex - 1];
+    const prevResult = csfState.results[prevDenom];
+    if (prevResult) {
+        const prevThreshold = csfState.pass === 1
+            ? prevResult.coarseThreshold
+            : (prevResult.refinedThreshold || prevResult.coarseThreshold);
+        if (prevThreshold != null) {
+            return Math.min(100, prevThreshold * 2.0);
+        }
+    }
+    return 100;
+}
+
+function csfAdaptiveEnd(levelIndex) {
+    if (csfState.pass === 1) {
+        return CSF_MIN_CONTRAST;
+    }
+    // In pass 2, narrow the range around coarse threshold
+    const denom = CSF_LEVELS[levelIndex];
+    const result = csfState.results[denom];
+    if (result && result.coarseThreshold != null) {
+        return Math.max(CSF_MIN_CONTRAST, result.coarseThreshold * 0.3);
+    }
+    return CSF_MIN_CONTRAST;
+}
+
+function csfEstimateThreshold(contrasts, errors) {
+    // Find the last correctly identified letter (lowest contrast correct)
+    let lastCorrectIdx = -1;
+    for (let i = 0; i < errors.length; i++) {
+        if (!errors[i]) lastCorrectIdx = i;
+    }
+    if (lastCorrectIdx === -1) {
+        // All wrong — threshold is above our starting contrast
+        return contrasts[0] * 1.5;
+    }
+    if (lastCorrectIdx === errors.length - 1) {
+        // All correct — threshold is below our lowest contrast
+        return contrasts[contrasts.length - 1] * 0.7;
+    }
+    // Interpolate between last correct and first wrong after it
+    const correctContrast = contrasts[lastCorrectIdx];
+    const wrongContrast = contrasts[lastCorrectIdx + 1];
+    return (correctContrast + wrongContrast) / 2;
+}
+
+function csfBroadcast(type, payload) {
+    if (csfState.channel) {
+        csfState.channel.postMessage({ type, ...payload });
+    }
+}
+
+function csfStartTest() {
+    // Initialize state
+    csfState.active = true;
+    csfState.pass = 1;
+    csfState.levelIndex = 0;
+    csfState.results = {};
+    csfState.waitingForClinician = false;
+
+    // Open BroadcastChannel
+    if (csfState.channel) csfState.channel.close();
+    csfState.channel = new BroadcastChannel('nearpoint-csf');
+    csfState.channel.onmessage = (e) => csfHandleClinicianMessage(e.data);
+
+    // Open clinician window
+    csfState.clinicianWindow = window.open('clinician.html', 'csf-clinician', 'width=700,height=850');
+
+    // Update UI to CSF mode
+    csfUpdateUI();
+
+    // Wait briefly for clinician to load, then send first line
+    setTimeout(() => csfNextLine(), 800);
+}
+
+function csfStopTest() {
+    csfBroadcast('csf-cancel', {});
+    csfState.active = false;
+    if (csfState.channel) {
+        csfState.channel.close();
+        csfState.channel = null;
+    }
+    csfState.clinicianWindow = null;
+    csfUpdateUI();
+    renderDistanceTest();
+}
+
+function csfNextLine() {
+    const denom = CSF_LEVELS[csfState.levelIndex];
+    const startContrast = csfAdaptiveStart(csfState.levelIndex);
+    const endContrast = csfAdaptiveEnd(csfState.levelIndex);
+
+    csfState.currentLetters = csfPickLetters(CSF_LETTERS_PER_LINE);
+    csfState.currentContrasts = csfComputeContrasts(startContrast, endContrast, CSF_LETTERS_PER_LINE);
+    csfState.waitingForClinician = true;
+
+    // Render on patient display
+    renderDistanceTest();
+
+    // Update indicator
+    const indicator = $('#snellen-indicator');
+    if (indicator) {
+        indicator.textContent = `CSF Pass ${csfState.pass} — 20/${denom}`;
+    }
+
+    // Broadcast to clinician
+    csfBroadcast('csf-line', {
+        snellenDenom: denom,
+        letters: csfState.currentLetters,
+        contrasts: csfState.currentContrasts,
+        pass: csfState.pass,
+        levelIndex: csfState.levelIndex,
+        totalLevels: CSF_LEVELS.length
+    });
+}
+
+function csfProcessResponse(errors) {
+    const denom = CSF_LEVELS[csfState.levelIndex];
+    const threshold = csfEstimateThreshold(csfState.currentContrasts, errors);
+
+    // Store result
+    if (!csfState.results[denom]) {
+        csfState.results[denom] = {};
+    }
+    if (csfState.pass === 1) {
+        csfState.results[denom].coarseThreshold = threshold;
+    } else {
+        csfState.results[denom].refinedThreshold = threshold;
+    }
+
+    csfState.waitingForClinician = false;
+
+    // Advance to next level
+    csfState.levelIndex++;
+
+    if (csfState.levelIndex >= CSF_LEVELS.length) {
+        if (csfState.pass === 1) {
+            // Start pass 2
+            csfState.pass = 2;
+            csfState.levelIndex = 0;
+            csfNextLine();
+        } else {
+            // Test complete
+            csfComplete();
+        }
+    } else {
+        csfNextLine();
+    }
+}
+
+function csfComplete() {
+    // Build final results
+    const finalResults = CSF_LEVELS.map(denom => {
+        const r = csfState.results[denom] || {};
+        const threshold = r.refinedThreshold || r.coarseThreshold || 100;
+        const cpd = 30 / denom;
+        const sensitivity = 100 / threshold; // CS = 1 / (threshold fraction)
+        return { denom, cpd, threshold, sensitivity };
+    });
+
+    // Broadcast to clinician
+    csfBroadcast('csf-complete', { results: finalResults });
+
+    // Show results on patient display
+    csfShowPatientResults(finalResults);
+
+    csfState.active = false;
+    csfState.waitingForClinician = false;
+    csfUpdateUI();
+}
+
+function csfHandleClinicianMessage(data) {
+    switch (data.type) {
+        case 'csf-response':
+            if (csfState.active && csfState.waitingForClinician) {
+                csfProcessResponse(data.errors);
+            }
+            break;
+        case 'csf-abort':
+            csfStopTest();
+            break;
+        case 'clinician-ready':
+            // Clinician loaded; if we have a pending line, resend
+            if (csfState.active && csfState.currentLetters.length > 0) {
+                const denom = CSF_LEVELS[csfState.levelIndex];
+                csfBroadcast('csf-line', {
+                    snellenDenom: denom,
+                    letters: csfState.currentLetters,
+                    contrasts: csfState.currentContrasts,
+                    pass: csfState.pass,
+                    levelIndex: csfState.levelIndex,
+                    totalLevels: CSF_LEVELS.length
+                });
+            }
+            break;
+    }
+}
+
+function csfUpdateUI() {
+    const csfBtn = $('#csf-start-btn');
+    const csfStopBtn = $('#csf-stop-btn');
+    const blPanel = $('#bl-bottom-panel');
+    const contrastPanel = $('#contrast-panel');
+    const snellenControls = $('.snellen-controls');
+    const indicator = $('#snellen-indicator');
+
+    if (csfState.active) {
+        if (csfBtn) csfBtn.classList.add('hidden');
+        if (csfStopBtn) csfStopBtn.classList.remove('hidden');
+        if (contrastPanel) contrastPanel.classList.add('hidden');
+        if (snellenControls) snellenControls.classList.add('hidden');
+        if (indicator) indicator.style.background = 'linear-gradient(135deg, #f59e0b, #d97706)';
+    } else {
+        if (csfBtn) csfBtn.classList.remove('hidden');
+        if (csfStopBtn) csfStopBtn.classList.add('hidden');
+        if (snellenControls) snellenControls.classList.remove('hidden');
+        if (indicator) {
+            indicator.style.background = '';
+            renderDistanceTest();
+        }
+        // Restore BL panel state
+        if (baileyLovieMode && contrastPanel) {
+            contrastPanel.classList.remove('hidden');
+        }
+    }
+}
+
+function csfShowPatientResults(results) {
+    // Show overlay with CSF graph on patient display
+    let overlay = $('#csf-results-overlay');
+    if (!overlay) return;
+
+    overlay.classList.remove('hidden');
+
+    const canvas = $('#csf-patient-canvas');
+    if (canvas) {
+        renderCSFGraph(canvas, results);
+    }
+}
+
+function csfClosePatientResults() {
+    const overlay = $('#csf-results-overlay');
+    if (overlay) overlay.classList.add('hidden');
+}
+
+// Normative CSF model: CS(f) = a * f^b * exp(-c * f)
+// Parametric fit to published letter-optotype norms (peak ~3-4 cpd)
+function csfNormative(cpd) {
+    const a = 75, b = 0.82, c = 0.2;
+    return a * Math.pow(cpd, b) * Math.exp(-c * cpd);
+}
+
+function renderCSFGraph(canvas, results) {
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    ctx.clearRect(0, 0, w, h);
+
+    // Margins
+    const ml = 65, mr = 25, mt = 30, mb = 55;
+    const pw = w - ml - mr;
+    const ph = h - mt - mb;
+
+    // Compute normalized deviations: dB = 10 * log10(patient_CS / norm_CS)
+    const normData = results.map(r => {
+        const norm = csfNormative(r.cpd);
+        const dB = 10 * Math.log10(Math.max(0.01, r.sensitivity) / norm);
+        return { ...r, norm, dB };
+    });
+
+    // X-axis: log spatial frequency
+    const cpdValues = results.map(r => r.cpd);
+    const logCpdMin = Math.floor(Math.log10(Math.min(...cpdValues)) * 2) / 2;
+    const logCpdMax = Math.ceil(Math.log10(Math.max(...cpdValues)) * 2) / 2;
+
+    // Y-axis: dB deviation, symmetric around 0
+    const maxAbsDB = Math.max(10, Math.ceil(Math.max(...normData.map(d => Math.abs(d.dB))) / 5) * 5);
+    const yMin = -maxAbsDB;
+    const yMax = maxAbsDB;
+
+    function toX(cpd) {
+        return ml + pw * (Math.log10(cpd) - logCpdMin) / (logCpdMax - logCpdMin);
+    }
+    function toY(dB) {
+        return mt + ph * (1 - (dB - yMin) / (yMax - yMin));
+    }
+
+    // --- Background shading: green above 0, red below 0 ---
+    const zeroY = toY(0);
+    ctx.fillStyle = 'rgba(16, 185, 129, 0.06)';
+    ctx.fillRect(ml, mt, pw, zeroY - mt);
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.06)';
+    ctx.fillRect(ml, zeroY, pw, mt + ph - zeroY);
+
+    // Grid lines
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.lineWidth = 0.5;
+    for (let lv = logCpdMin; lv <= logCpdMax; lv += 0.5) {
+        const x = toX(Math.pow(10, lv));
+        ctx.beginPath(); ctx.moveTo(x, mt); ctx.lineTo(x, mt + ph); ctx.stroke();
+    }
+    for (let dB = yMin; dB <= yMax; dB += 5) {
+        if (dB === 0) continue;
+        const y = toY(dB);
+        ctx.beginPath(); ctx.moveTo(ml, y); ctx.lineTo(ml + pw, y); ctx.stroke();
+    }
+
+    // Axes
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(ml, mt); ctx.lineTo(ml, mt + ph); ctx.lineTo(ml + pw, mt + ph);
+    ctx.stroke();
+
+    // --- Average line (0 dB) ---
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(ml, zeroY); ctx.lineTo(ml + pw, zeroY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // "Average" label
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('Average', ml + pw + 4, zeroY + 3);
+
+    // X-axis labels
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    for (let lv = logCpdMin; lv <= logCpdMax; lv += 0.5) {
+        const val = Math.pow(10, lv);
+        const x = toX(val);
+        ctx.fillText(val < 1 ? val.toFixed(2) : val.toFixed(1), x, mt + ph + 18);
+    }
+    ctx.fillText('Spatial Frequency (cpd)', ml + pw / 2, mt + ph + 42);
+
+    // Y-axis labels (dB)
+    ctx.textAlign = 'right';
+    for (let dB = yMin; dB <= yMax; dB += 5) {
+        const y = toY(dB);
+        const label = (dB > 0 ? '+' : '') + dB;
+        ctx.fillStyle = dB > 0 ? 'rgba(16, 185, 129, 0.7)'
+                      : dB < 0 ? 'rgba(239, 68, 68, 0.7)'
+                      : 'rgba(255,255,255,0.6)';
+        ctx.fillText(label, ml - 8, y + 4);
+    }
+    ctx.save();
+    ctx.translate(13, mt + ph / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fillText('Deviation from Average (dB)', 0, 0);
+    ctx.restore();
+
+    // "Better" / "Worse" labels
+    ctx.font = '9px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(16, 185, 129, 0.5)';
+    ctx.fillText('BETTER', ml + 6, mt + 14);
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.5)';
+    ctx.fillText('WORSE', ml + 6, mt + ph - 6);
+
+    // --- Fill area between patient line and zero line ---
+    // Above average (green)
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(ml, mt, pw, zeroY - mt);
+    ctx.clip();
+    ctx.fillStyle = 'rgba(16, 185, 129, 0.15)';
+    ctx.beginPath();
+    ctx.moveTo(toX(normData[0].cpd), zeroY);
+    normData.forEach(d => ctx.lineTo(toX(d.cpd), toY(d.dB)));
+    ctx.lineTo(toX(normData[normData.length - 1].cpd), zeroY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    // Below average (red)
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(ml, zeroY, pw, mt + ph - zeroY);
+    ctx.clip();
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.15)';
+    ctx.beginPath();
+    ctx.moveTo(toX(normData[0].cpd), zeroY);
+    normData.forEach(d => ctx.lineTo(toX(d.cpd), toY(d.dB)));
+    ctx.lineTo(toX(normData[normData.length - 1].cpd), zeroY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    // Patient data line
+    ctx.strokeStyle = '#3b82f6';
+    ctx.lineWidth = 2.5;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    normData.forEach((d, i) => {
+        const x = toX(d.cpd);
+        const y = toY(d.dB);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // Data points
+    normData.forEach(d => {
+        const x = toX(d.cpd);
+        const y = toY(d.dB);
+        ctx.beginPath();
+        ctx.arc(x, y, 5, 0, Math.PI * 2);
+        ctx.fillStyle = d.dB >= 0 ? '#10b981' : '#ef4444';
+        ctx.fill();
+        ctx.strokeStyle = 'white';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+    });
+
+    // Snellen labels below x-axis
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.font = '9px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    normData.forEach(d => {
+        ctx.fillText(`20/${d.denom}`, toX(d.cpd), mt + ph + 30);
+    });
 }
 
 function initLuminanceCalibration() {

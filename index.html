@@ -303,6 +303,20 @@
                     </svg>
                 </button>
 
+                <!-- CSF Test start button -->
+                <button id="csf-start-btn" class="btn-snellen csf-start-btn" title="Start CSF Test">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <text x="2" y="16" font-size="10" font-weight="700" fill="currentColor" stroke="none" font-family="Arial">CSF</text>
+                    </svg>
+                </button>
+
+                <!-- CSF Test stop button (hidden by default) -->
+                <button id="csf-stop-btn" class="btn-snellen csf-stop-btn hidden" title="Stop CSF Test">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="6" y="6" width="12" height="12" rx="1" fill="currentColor"/>
+                    </svg>
+                </button>
+
                 <!-- Contrast controls (shown when B-L is active) -->
                 <div id="contrast-panel" class="contrast-panel hidden">
                     <button id="luminance-cal-btn" class="btn-snellen btn-luminance-cal" title="Luminance calibration">
@@ -339,6 +353,15 @@
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
                     </button>
                 </div>
+            </div>
+        </div>
+
+        <!-- CSF Results Overlay -->
+        <div id="csf-results-overlay" class="csf-results-overlay hidden">
+            <div class="csf-results-content">
+                <button id="csf-results-close" class="luminance-modal-close">&times;</button>
+                <h2>Contrast Sensitivity Function</h2>
+                <canvas id="csf-patient-canvas" class="csf-graph-canvas"></canvas>
             </div>
         </div>
 

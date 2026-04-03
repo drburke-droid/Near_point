@@ -1,11 +1,13 @@
-const CACHE_NAME = 'nearpoint-v3';
+const CACHE_NAME = 'nearpoint-v4';
 const ASSETS = [
     './',
     './index.html',
     './style.css',
     './app.js',
     './logo.png',
-    './windows-11-bloom-5120x2880-14423.jpg'
+    './windows-11-bloom-5120x2880-14423.jpg',
+    './clinician.html',
+    './clinician.js'
 ];
 
 self.addEventListener('install', event => {
