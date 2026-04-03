@@ -49,15 +49,9 @@ channel.onmessage = (e) => {
 // --- Show a new line of letters ---
 function showLine(data) {
     currentLine = data;
-    errors = new Array(data.letters.length).fill(0);
+    // In "mark correct" mode, default all to wrong so clinician taps the correct ones
+    errors = new Array(data.letters.length).fill(markMode === 'correct' ? 1 : 0);
     testComplete = false;
-
-    // Reset mark mode to 'wrong' for each new line
-    markMode = 'wrong';
-    const modeBtn = $('#btn-mark-mode');
-    const hint = $('#mark-hint');
-    if (modeBtn) { modeBtn.textContent = 'Mode: Mark Wrong'; modeBtn.classList.remove('mode-correct'); }
-    if (hint) hint.textContent = 'Tap wrong letters';
 
     waitingPanel.classList.add('hidden');
     resultsPanel.classList.add('hidden');
