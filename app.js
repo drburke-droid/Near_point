@@ -1827,14 +1827,20 @@ function csfComputeContrasts(startContrast, endContrast, count) {
 }
 
 function csfAdaptiveStart(levelIndex) {
+    if (csfState.pass === 2) {
+        // Pass 2: use this level's coarse threshold to center the range
+        const denom = CSF_LEVELS[levelIndex];
+        const result = csfState.results[denom];
+        if (result && result.coarseThreshold != null) {
+            return Math.min(100, result.coarseThreshold * 1.8);
+        }
+    }
     if (levelIndex === 0) return 100;
-    // Use previous level's threshold to adapt starting contrast
+    // Pass 1: use previous level's threshold to adapt starting contrast
     const prevDenom = CSF_LEVELS[levelIndex - 1];
     const prevResult = csfState.results[prevDenom];
     if (prevResult) {
-        const prevThreshold = csfState.pass === 1
-            ? prevResult.coarseThreshold
-            : (prevResult.refinedThreshold || prevResult.coarseThreshold);
+        const prevThreshold = prevResult.coarseThreshold;
         if (prevThreshold != null) {
             return Math.min(100, prevThreshold * 2.0);
         }
@@ -1843,15 +1849,15 @@ function csfAdaptiveStart(levelIndex) {
 }
 
 function csfAdaptiveEnd(levelIndex) {
-    if (csfState.pass === 1) {
-        return CSF_MIN_CONTRAST;
+    if (csfState.pass === 2) {
+        // Pass 2: narrow range — end at 30% of coarse threshold
+        const denom = CSF_LEVELS[levelIndex];
+        const result = csfState.results[denom];
+        if (result && result.coarseThreshold != null) {
+            return Math.max(CSF_MIN_CONTRAST, result.coarseThreshold * 0.3);
+        }
     }
-    // In pass 2, narrow the range around coarse threshold
-    const denom = CSF_LEVELS[levelIndex];
-    const result = csfState.results[denom];
-    if (result && result.coarseThreshold != null) {
-        return Math.max(CSF_MIN_CONTRAST, result.coarseThreshold * 0.3);
-    }
+    // Pass 1: sweep all the way to the display floor
     return CSF_MIN_CONTRAST;
 }
 
