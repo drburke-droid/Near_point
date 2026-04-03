@@ -7,6 +7,7 @@ const channel = new BroadcastChannel('nearpoint-csf');
 let currentLine = null;   // { snellenDenom, letters, contrasts, pass, levelIndex, totalLevels }
 let errors = [];          // [0,0,1,0,...] per letter
 let testComplete = false;
+let markMode = 'wrong';   // 'wrong' = mark incorrect (default), 'correct' = mark correct
 
 // --- DOM refs ---
 const $ = (sel) => document.querySelector(sel);
@@ -45,6 +46,13 @@ function showLine(data) {
     errors = new Array(data.letters.length).fill(0);
     testComplete = false;
 
+    // Reset mark mode to 'wrong' for each new line
+    markMode = 'wrong';
+    const modeBtn = $('#btn-mark-mode');
+    const hint = $('#mark-hint');
+    if (modeBtn) { modeBtn.textContent = 'Mode: Mark Wrong'; modeBtn.classList.remove('mode-correct'); }
+    if (hint) hint.textContent = 'Tap wrong letters';
+
     waitingPanel.classList.add('hidden');
     resultsPanel.classList.add('hidden');
     testPanel.classList.remove('hidden');
@@ -79,12 +87,20 @@ function showLine(data) {
         label.textContent = contrastLabel;
 
         const toggle = document.createElement('button');
-        toggle.className = 'error-toggle';
-        toggle.textContent = '\u2717'; // ✗
+        toggle.className = 'mark-toggle';
         toggle.dataset.index = i;
+        applyToggleStyle(toggle, i);
         toggle.addEventListener('click', () => {
-            errors[i] = errors[i] ? 0 : 1;
-            toggle.classList.toggle('active', !!errors[i]);
+            if (markMode === 'wrong') {
+                errors[i] = errors[i] ? 0 : 1;
+            } else {
+                // 'correct' mode: clicking marks as correct (clears error)
+                // If already correct, toggle back to wrong
+                errors[i] = errors[i] ? 0 : 1;
+                // Invert: in correct mode, active = correct = no error
+                // We still store errors[] the same way, just invert the visual
+            }
+            applyToggleStyle(toggle, i);
         });
 
         cell.appendChild(display);
@@ -95,6 +111,64 @@ function showLine(data) {
 
     btnNext.disabled = false;
 }
+
+function applyToggleStyle(toggle, i) {
+    if (markMode === 'wrong') {
+        // Default mode: toggles show X, active = marked wrong
+        toggle.textContent = '\u2717'; // ✗
+        toggle.classList.toggle('active-wrong', !!errors[i]);
+        toggle.classList.remove('active-correct');
+    } else {
+        // Correct mode: toggles show checkmark, active = marked correct
+        toggle.textContent = '\u2713'; // ✓
+        toggle.classList.toggle('active-correct', !errors[i]);
+        toggle.classList.remove('active-wrong');
+    }
+}
+
+function refreshAllToggles() {
+    const toggles = lettersGrid.querySelectorAll('.mark-toggle');
+    toggles.forEach((toggle, i) => applyToggleStyle(toggle, i));
+}
+
+function switchMarkMode(mode) {
+    if (mode === markMode) return;
+    const prevMode = markMode;
+    markMode = mode;
+
+    const modeBtn = $('#btn-mark-mode');
+    const hint = $('#mark-hint');
+    if (markMode === 'correct') {
+        modeBtn.textContent = 'Mode: Mark Correct';
+        modeBtn.classList.add('mode-correct');
+        if (hint) hint.textContent = 'Tap correct letters';
+    } else {
+        modeBtn.textContent = 'Mode: Mark Wrong';
+        modeBtn.classList.remove('mode-correct');
+        if (hint) hint.textContent = 'Tap wrong letters';
+    }
+
+    // When switching modes, if no toggles have been touched yet,
+    // flip to all-wrong (so clinician can tap the few correct ones)
+    if (prevMode === 'wrong' && mode === 'correct') {
+        const anyMarked = errors.some(e => e === 1);
+        if (!anyMarked) {
+            errors = errors.map(() => 1); // assume all wrong, tap the correct ones
+        }
+    } else if (prevMode === 'correct' && mode === 'wrong') {
+        const anyCorrect = errors.some(e => e === 0);
+        if (!anyCorrect) {
+            errors = errors.map(() => 0); // reset, tap the wrong ones
+        }
+    }
+
+    refreshAllToggles();
+}
+
+// --- Mark mode toggle ---
+$('#btn-mark-mode').addEventListener('click', () => {
+    switchMarkMode(markMode === 'wrong' ? 'correct' : 'wrong');
+});
 
 // --- Send response to patient display ---
 btnNext.addEventListener('click', () => {

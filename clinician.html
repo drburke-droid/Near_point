@@ -127,7 +127,7 @@
             font-variant-numeric: tabular-nums;
         }
 
-        .error-toggle {
+        .mark-toggle {
             width: 32px;
             height: 32px;
             border-radius: 50%;
@@ -138,20 +138,63 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            color: transparent;
+            color: rgba(255,255,255,0.2);
             font-size: 0.9rem;
             font-weight: 700;
         }
 
-        .error-toggle:hover {
-            border-color: rgba(239, 68, 68, 0.4);
-            background: rgba(239, 68, 68, 0.1);
+        .mark-toggle:hover {
+            border-color: rgba(255,255,255,0.3);
+            background: rgba(255,255,255,0.1);
         }
 
-        .error-toggle.active {
+        .mark-toggle.active-wrong {
             background: rgba(239, 68, 68, 0.2);
             border-color: rgba(239, 68, 68, 0.6);
             color: #f87171;
+        }
+
+        .mark-toggle.active-correct {
+            background: rgba(16, 185, 129, 0.2);
+            border-color: rgba(16, 185, 129, 0.6);
+            color: #34d399;
+        }
+
+        .mark-mode-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .mark-mode-row .section-label {
+            margin-bottom: 0;
+        }
+
+        .btn-mark-mode {
+            padding: 5px 12px;
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 6px;
+            background: rgba(255,255,255,0.06);
+            color: rgba(255,255,255,0.6);
+            font-family: inherit;
+            font-size: 0.7rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .btn-mark-mode:hover {
+            background: rgba(255,255,255,0.12);
+            color: rgba(255,255,255,0.85);
+        }
+
+        .btn-mark-mode.mode-correct {
+            border-color: rgba(16, 185, 129, 0.3);
+            background: rgba(16, 185, 129, 0.1);
+            color: #34d399;
         }
 
         .controls {
@@ -304,7 +347,10 @@
 
             <div class="letters-grid" id="letters-grid"></div>
 
-            <div class="section-label">Mark incorrect responses (tap X below wrong letters)</div>
+            <div class="mark-mode-row">
+                <div class="section-label" id="mark-hint">Tap wrong letters</div>
+                <button class="btn-mark-mode" id="btn-mark-mode">Mode: Mark Wrong</button>
+            </div>
 
             <div class="controls">
                 <button class="btn-next" id="btn-next">Next Line</button>
