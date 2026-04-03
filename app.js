@@ -1831,11 +1831,15 @@ function csfComputeContrasts(startContrast, endContrast, count) {
 
 function csfAdaptiveStart(levelIndex) {
     const denom = csfState.levels[levelIndex];
+    const isExtension = denom <= 20; // beyond 20/20 — above-average territory
+
     if (csfState.pass === 2) {
-        // Pass 2: interpolate expected threshold from neighboring coarse results
         const expected = csfInterpolateThreshold(denom);
         if (expected != null) {
-            return Math.min(100, expected * 1.8);
+            // For extension levels in pass 2, use wider range to probe their limits
+            const mult = isExtension ? 3.0 : 1.8;
+            const floor = isExtension ? 30 : 0;
+            return Math.min(100, Math.max(floor, expected * mult));
         }
     }
     if (levelIndex === 0) return 100;
@@ -1845,6 +1849,11 @@ function csfAdaptiveStart(levelIndex) {
     if (prevResult) {
         const prevThreshold = prevResult.coarseThreshold;
         if (prevThreshold != null) {
+            // Extension levels: always start at minimum 50% to really push them
+            // This ensures we probe a wide contrast range, not just near-threshold
+            if (isExtension) {
+                return Math.max(50, Math.min(100, prevThreshold * 3.0));
+            }
             return Math.min(100, prevThreshold * 2.0);
         }
     }
