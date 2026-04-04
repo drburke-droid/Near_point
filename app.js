@@ -585,7 +585,8 @@ let contrastPercent = 100; // Weber contrast percentage
 
 // --- CSF Test State ---
 const CSF_ALL_LEVELS = [100, 70, 50, 40, 30, 25, 20, 15, 10]; // full range, tested top-down
-const CSF_LETTERS_PER_LINE = 8;
+const CSF_LETTERS_PASS1 = 8;   // single letter per contrast (coarse survey)
+const CSF_LETTERS_PASS2 = 10;  // 2 letters at each of 5 contrast levels (paired validation)
 const CSF_MIN_CONTRAST = 1.25; // Display floor %
 
 const csfState = {
@@ -2157,13 +2158,52 @@ function csfStopTest() {
     renderDistanceTest();
 }
 
+// Build paired contrast array for pass 2+: 2 letters at each of N levels
+function csfComputePairedContrasts(startContrast, endContrast, numLevels) {
+    const levels = csfComputeContrasts(startContrast, endContrast, numLevels);
+    // Duplicate each level: [A, A, B, B, C, C, ...]
+    const paired = [];
+    levels.forEach(c => { paired.push(c); paired.push(c); });
+    return paired;
+}
+
+// Estimate threshold from paired pass 2 data: require both letters correct at a contrast
+function csfEstimateThresholdPaired(contrasts, errors) {
+    // Group into pairs (indices 0-1, 2-3, 4-5, ...)
+    let lastConfirmedIdx = -1;
+    for (let i = 0; i < contrasts.length - 1; i += 2) {
+        const bothCorrect = !errors[i] && !errors[i + 1];
+        if (bothCorrect) {
+            lastConfirmedIdx = i + 1; // last index of this pair
+        }
+    }
+    if (lastConfirmedIdx === -1) {
+        return contrasts[0] * 1.5;
+    }
+    if (lastConfirmedIdx >= contrasts.length - 1) {
+        return contrasts[contrasts.length - 1] * 0.7;
+    }
+    // Threshold between last confirmed pair and next pair
+    const confirmedContrast = contrasts[lastConfirmedIdx];
+    const nextContrast = contrasts[lastConfirmedIdx + 1];
+    return (confirmedContrast + nextContrast) / 2;
+}
+
 function csfNextLine() {
     const denom = csfState.levels[csfState.levelIndex];
     const startContrast = csfAdaptiveStart(csfState.levelIndex);
     const endContrast = csfAdaptiveEnd(csfState.levelIndex);
 
-    csfState.currentLetters = csfPickLetters(CSF_LETTERS_PER_LINE);
-    csfState.currentContrasts = csfComputeContrasts(startContrast, endContrast, CSF_LETTERS_PER_LINE);
+    if (csfState.pass === 1) {
+        // Pass 1: single letter per contrast (fast coarse survey)
+        csfState.currentLetters = csfPickLetters(CSF_LETTERS_PASS1);
+        csfState.currentContrasts = csfComputeContrasts(startContrast, endContrast, CSF_LETTERS_PASS1);
+    } else {
+        // Pass 2+: paired letters for statistical validation
+        const numLevels = CSF_LETTERS_PASS2 / 2; // 5 contrast levels
+        csfState.currentContrasts = csfComputePairedContrasts(startContrast, endContrast, numLevels);
+        csfState.currentLetters = csfPickLetters(CSF_LETTERS_PASS2);
+    }
     csfState.waitingForClinician = true;
 
     // Render on patient display
@@ -2190,7 +2230,10 @@ function csfNextLine() {
 function csfProcessResponse(errors) {
     const denom = csfState.levels[csfState.levelIndex];
     const allWrong = errors.every(e => e === 1);
-    const threshold = csfEstimateThreshold(csfState.currentContrasts, errors);
+    // Use paired estimator for pass 2+ (requires both letters correct per level)
+    const threshold = csfState.pass >= 2
+        ? csfEstimateThresholdPaired(csfState.currentContrasts, errors)
+        : csfEstimateThreshold(csfState.currentContrasts, errors);
 
     // Store result — pass 3 overwrites refined threshold for retested levels
     if (!csfState.results[denom]) {
