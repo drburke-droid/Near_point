@@ -326,14 +326,19 @@ function showResults(results) {
 }
 
 function showCancelled() {
+    returnToLineControls();
+    statusBadge.textContent = 'Cancelled';
+    statusBadge.className = 'status-badge';
+}
+
+function returnToLineControls() {
     testPanel.classList.add('hidden');
     resultsPanel.classList.add('hidden');
     pass3Panel.classList.add('hidden');
     waitingPanel.classList.remove('hidden');
-    waitingPanel.querySelector('h2').textContent = 'Test cancelled';
-    waitingPanel.querySelector('p').textContent = 'The CSF test was stopped.';
-    statusBadge.textContent = 'Cancelled';
+    statusBadge.textContent = 'Ready';
     statusBadge.className = 'status-badge';
+    statusBadge.style.background = '';
 }
 
 function showPass3Suggestion(results, noisyDenoms) {
@@ -870,4 +875,9 @@ $('#btn-line-refresh').addEventListener('click', () => {
 
 $('#btn-csf-remote').addEventListener('click', () => {
     channel.postMessage({ type: 'csf-start-remote' });
+});
+
+$('#btn-back-acuity').addEventListener('click', () => {
+    channel.postMessage({ type: 'csf-abort' });
+    returnToLineControls();
 });
