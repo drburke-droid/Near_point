@@ -2363,6 +2363,39 @@ function csfFinalize(finalResults) {
     csfUpdateUI();
 }
 
+// Debug: generate fake results and jump to graph
+// Usage: csfDebug() in console, or add ?debug to URL
+function csfDebug() {
+    const fakeResults = CSF_ALL_LEVELS.map(denom => {
+        const cpd = 30 / denom;
+        const norm = csfNormative(cpd);
+        // Simulate patient slightly above average with some noise
+        const jitter = 1 + (Math.random() - 0.4) * 0.5;
+        const sensitivity = norm * jitter;
+        const threshold = 100 / sensitivity;
+        return { denom, cpd, threshold, sensitivity };
+    });
+
+    // Make sure distance tab is active and channel exists
+    setupDistanceChannel();
+    showScreen('test');
+    $('#test-screen').classList.add('distance-clean');
+    const distTab = $('[data-tab="distance"]');
+    if (distTab) distTab.click();
+
+    // Launch clinician and send results
+    launchClinicianWindow();
+    setTimeout(() => {
+        csfBroadcast('csf-complete', { results: fakeResults });
+        csfShowPatientResults(fakeResults);
+    }, 600);
+}
+
+// Auto-trigger if ?debug in URL
+if (window.location.search.includes('debug')) {
+    document.addEventListener('DOMContentLoaded', () => setTimeout(csfDebug, 500));
+}
+
 function csfHandleClinicianMessage(data) {
     switch (data.type) {
         case 'csf-response':
