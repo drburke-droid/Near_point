@@ -628,6 +628,11 @@ function showScreen(name) {
     $$('.screen').forEach(s => s.classList.add('hidden'));
     $(`#${name}-screen`).classList.remove('hidden');
 
+    // Clear distance clean mode when leaving test screen
+    if (name !== 'test') {
+        $('#test-screen').classList.remove('distance-clean');
+    }
+
     if (name === 'input') {
         updateConfigSummary();
     }
@@ -712,8 +717,9 @@ function setupDistanceCalScreen() {
         const distVal = parseFloat($('#dist-cal-distance').value) || 20;
         const distUnit = $('#dist-cal-dist-unit').value;
 
-        // Show test screen, switch to distance tab, set distance
+        // Show test screen in clean mode (no toolbars, just hallway bg + letters)
         showScreen('test');
+        $('#test-screen').classList.add('distance-clean');
 
         // Activate distance tab
         const distTab = $('[data-tab="distance"]');

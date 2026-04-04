@@ -1391,6 +1391,35 @@ h3 {
     font-size: 1rem;
 }
 
+/* ---- Distance clean mode (minimal chrome, keep hallway bg) ---- */
+
+.distance-clean .test-nav,
+.distance-clean .test-info-bar,
+.distance-clean .distance-test-bar {
+    display: none !important;
+}
+
+.distance-clean .bl-bottom-panel,
+.distance-clean .snellen-bottom-panel {
+    display: none !important;
+}
+
+.distance-clean #distance-tab {
+    display: block !important;
+    min-height: 100vh;
+}
+
+.distance-clean .distance-test-display {
+    min-height: 100vh;
+    padding: 0;
+}
+
+.distance-clean #standard-tab,
+.distance-clean #occupation-tab,
+.distance-clean #documents-tab {
+    display: none !important;
+}
+
 /* ---- Distance acuity test ---- */
 
 .distance-test-bar {
