@@ -1555,15 +1555,14 @@ h3 {
     justify-content: center;
     gap: 0.3em;
     background: white;
-    padding: 32px 48px;
-    border-radius: var(--radius-lg);
+    padding: 0.35em 0.5em;
+    border-radius: 0;
     box-shadow: var(--shadow-xl);
     line-height: 1;
     letter-spacing: 0.15em;
     font-weight: 700;
     color: var(--slate-900);
     transition: transform var(--duration-normal) var(--ease-out);
-    min-height: 80px;
     user-select: none;
 }
 
