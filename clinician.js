@@ -365,12 +365,11 @@ function showPass3Suggestion(results, noisyDenoms) {
 // ==========================================
 
 // Normative letter-optotype CSF: log-Gaussian in log-frequency space
-// Beyond 20/20 (1.5 cpd): average patient can't read, so norm = 1.0
+// Peaks near 20/50, smooth decline through 20/20 to 20/10
 function csfNormative(cpd) {
-    const peak = 50;
-    const fp = 0.6;
+    const peak = 45;
+    const fp = 0.5;
     const sigma = 0.3;
-    if (cpd > 1.5) return 1.0;
     const logRatio = Math.log10(cpd / fp);
     return peak * Math.exp(-(logRatio * logRatio) / (2 * sigma * sigma));
 }
