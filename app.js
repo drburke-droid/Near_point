@@ -2462,17 +2462,34 @@ function csfUpdateUI() {
     }
 }
 
+let lastCSFResultsForGraph = null;
+
 function csfShowPatientResults(results) {
-    // Show overlay with CSF graph on patient display
+    lastCSFResultsForGraph = results;
     let overlay = $('#csf-results-overlay');
     if (!overlay) return;
 
     overlay.classList.remove('hidden');
 
     const canvas = $('#csf-patient-canvas');
-    if (canvas) {
-        renderCSFGraph(canvas, results);
-    }
+    if (canvas) renderCSFGraph(canvas, results);
+
+    // Wire up reference toggle buttons
+    $$('.csf-ref-btn').forEach(btn => {
+        btn.onclick = () => {
+            const ref = btn.dataset.ref;
+            if (activeCSFRefs.has(ref)) {
+                activeCSFRefs.delete(ref);
+                btn.classList.remove('active');
+            } else {
+                activeCSFRefs.add(ref);
+                btn.classList.add('active');
+            }
+            if (canvas && lastCSFResultsForGraph) {
+                renderCSFGraph(canvas, lastCSFResultsForGraph);
+            }
+        };
+    });
 }
 
 function csfClosePatientResults() {
@@ -2520,6 +2537,22 @@ function catmullRomSpline(points, segments) {
     return result;
 }
 
+// Reference CSF models for overlay comparison
+const CSF_REFERENCES = {
+    normal: { label: 'Average', peak: 45, fp: 0.5, sigma: 0.3 },
+    elite:  { label: 'Elite Vision', peak: 120, fp: 0.6, sigma: 0.38, color: '#facc15', desc: 'Fighter pilot / pro athlete' },
+    cataract: { label: 'Cataract', peak: 12, fp: 0.35, sigma: 0.22, color: '#f87171', desc: 'Moderate nuclear cataract' },
+    mfiol: { label: 'Multifocal IOL', peak: 22, fp: 0.4, sigma: 0.24, color: '#fb923c', desc: 'Diffractive multifocal implant' },
+    mfcl:  { label: 'Multifocal CL', peak: 28, fp: 0.42, sigma: 0.26, color: '#c084fc', desc: 'Center-near multifocal contact' }
+};
+
+function csfRefCurve(ref, cpd) {
+    const lr = Math.log10(cpd / ref.fp);
+    return ref.peak * Math.exp(-(lr * lr) / (2 * ref.sigma * ref.sigma));
+}
+
+let activeCSFRefs = new Set(); // which reference overlays are toggled on
+
 function renderCSFGraph(canvas, results) {
     const dpr = window.devicePixelRatio || 1;
     const w = canvas.clientWidth;
@@ -2532,215 +2565,240 @@ function renderCSFGraph(canvas, results) {
     const font = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
     ctx.clearRect(0, 0, w, h);
 
-    // Margins — extra room for dual labels
-    const ml = 58, mr = 50, mt = 24, mb = 62;
+    // Margins
+    const ml = 56, mr = 20, mt = 20, mb = 58;
     const pw = w - ml - mr;
     const ph = h - mt - mb;
 
-    // Compute normalized deviations
-    const normData = results.map(r => {
-        const norm = csfNormative(r.cpd);
-        const dB = 10 * Math.log10(Math.max(0.01, r.sensitivity) / norm);
-        return { ...r, norm, dB };
-    });
+    // Axis ranges — raw CSF (log-log)
+    const logCpdMin = -0.6;  // ~0.25 cpd
+    const logCpdMax = 0.55;  // ~3.5 cpd
+    const logCsMin = -0.1;   // ~0.8 CS
+    const logCsMax = 2.2;    // ~160 CS
 
-    // X-axis: log spatial frequency
-    const cpdValues = results.map(r => r.cpd);
-    const logCpdMin = Math.floor(Math.log10(Math.min(...cpdValues)) * 4) / 4 - 0.05;
-    const logCpdMax = Math.ceil(Math.log10(Math.max(...cpdValues)) * 4) / 4 + 0.05;
+    function toX(cpd) { return ml + pw * (Math.log10(Math.max(0.25, cpd)) - logCpdMin) / (logCpdMax - logCpdMin); }
+    function toY(cs) { return mt + ph * (1 - (Math.log10(Math.max(0.8, cs)) - logCsMin) / (logCsMax - logCsMin)); }
 
-    // Y-axis: dB deviation, symmetric
-    const maxAbsDB = Math.max(10, Math.ceil(Math.max(...normData.map(d => Math.abs(d.dB))) / 5) * 5);
-    const yMin = -maxAbsDB;
-    const yMax = maxAbsDB;
-
-    function toX(cpd) { return ml + pw * (Math.log10(cpd) - logCpdMin) / (logCpdMax - logCpdMin); }
-    function toY(dB) { return mt + ph * (1 - (dB - yMin) / (yMax - yMin)); }
-    const zeroY = toY(0);
-
-    // --- Background gradient zones ---
-    const greenGrad = ctx.createLinearGradient(0, mt, 0, zeroY);
-    greenGrad.addColorStop(0, 'rgba(16, 185, 129, 0.10)');
-    greenGrad.addColorStop(1, 'rgba(16, 185, 129, 0.01)');
-    ctx.fillStyle = greenGrad;
-    ctx.fillRect(ml, mt, pw, zeroY - mt);
-    const redGrad = ctx.createLinearGradient(0, zeroY, 0, mt + ph);
-    redGrad.addColorStop(0, 'rgba(239, 68, 68, 0.01)');
-    redGrad.addColorStop(1, 'rgba(239, 68, 68, 0.10)');
-    ctx.fillStyle = redGrad;
-    ctx.fillRect(ml, zeroY, pw, mt + ph - zeroY);
+    // Sample a model curve as canvas points
+    function sampleCurve(fn, steps) {
+        const pts = [];
+        for (let i = 0; i <= steps; i++) {
+            const logCpd = logCpdMin + (logCpdMax - logCpdMin) * i / steps;
+            const cpd = Math.pow(10, logCpd);
+            const cs = fn(cpd);
+            pts.push({ x: toX(cpd), y: toY(cs) });
+        }
+        return pts;
+    }
 
     // --- Fine grid ---
-    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
     ctx.lineWidth = 0.5;
-    for (let lv = Math.floor(logCpdMin * 4) / 4; lv <= logCpdMax; lv += 0.125) {
-        const x = toX(Math.pow(10, lv));
-        if (x < ml || x > ml + pw) continue;
+    // Vertical
+    [0.3, 0.5, 0.7, 1.0, 1.5, 2.0, 3.0].forEach(cpd => {
+        const x = toX(cpd);
+        ctx.strokeStyle = 'rgba(255,255,255,0.05)';
         ctx.beginPath(); ctx.moveTo(x, mt); ctx.lineTo(x, mt + ph); ctx.stroke();
-    }
-    for (let dB = yMin; dB <= yMax; dB += 2.5) {
-        if (Math.abs(dB) < 0.1) continue;
-        const y = toY(dB);
-        ctx.strokeStyle = (dB % 5 === 0) ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.03)';
+    });
+    // Horizontal
+    [1, 2, 5, 10, 20, 50, 100].forEach(cs => {
+        const y = toY(cs);
+        ctx.strokeStyle = 'rgba(255,255,255,0.04)';
         ctx.beginPath(); ctx.moveTo(ml, y); ctx.lineTo(ml + pw, y); ctx.stroke();
-    }
+    });
 
     // --- Axes ---
-    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(ml, mt); ctx.lineTo(ml, mt + ph); ctx.lineTo(ml + pw, mt + ph);
     ctx.stroke();
 
-    // --- Average line ---
+    // --- Average normative curve ---
+    const normPts = sampleCurve(cpd => csfNormative(cpd), 80);
     ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-    ctx.lineWidth = 0.75;
-    ctx.setLineDash([6, 4]);
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
     ctx.beginPath();
-    ctx.moveTo(ml, zeroY); ctx.lineTo(ml + pw, zeroY);
+    normPts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
     ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = 'rgba(255,255,255,0.25)';
-    ctx.font = `9px ${font}`;
-    ctx.textAlign = 'left';
-    ctx.fillText('AVERAGE', ml + pw + 5, zeroY + 3);
 
-    // --- Spline ---
-    const dataPoints = normData.map(d => ({ x: toX(d.cpd), y: toY(d.dB) }));
-    const spline = catmullRomSpline(dataPoints, 24);
-
-    // --- Gradient fill between spline and zero ---
-    ctx.save();
-    ctx.beginPath(); ctx.rect(ml, mt, pw, zeroY - mt); ctx.clip();
-    const gf = ctx.createLinearGradient(0, mt, 0, zeroY);
-    gf.addColorStop(0, 'rgba(52, 211, 153, 0.25)');
-    gf.addColorStop(1, 'rgba(52, 211, 153, 0.03)');
-    ctx.fillStyle = gf;
-    ctx.beginPath();
-    ctx.moveTo(spline[0].x, zeroY);
-    spline.forEach(p => ctx.lineTo(p.x, p.y));
-    ctx.lineTo(spline[spline.length - 1].x, zeroY);
-    ctx.closePath(); ctx.fill(); ctx.restore();
-
-    ctx.save();
-    ctx.beginPath(); ctx.rect(ml, zeroY, pw, mt + ph - zeroY); ctx.clip();
-    const rf = ctx.createLinearGradient(0, zeroY, 0, mt + ph);
-    rf.addColorStop(0, 'rgba(248, 113, 113, 0.03)');
-    rf.addColorStop(1, 'rgba(248, 113, 113, 0.25)');
-    ctx.fillStyle = rf;
-    ctx.beginPath();
-    ctx.moveTo(spline[0].x, zeroY);
-    spline.forEach(p => ctx.lineTo(p.x, p.y));
-    ctx.lineTo(spline[spline.length - 1].x, zeroY);
-    ctx.closePath(); ctx.fill(); ctx.restore();
-
-    // --- Subtle glow ---
-    ctx.save();
-    ctx.shadowColor = 'rgba(59, 130, 246, 0.35)';
-    ctx.shadowBlur = 8;
-    ctx.strokeStyle = 'rgba(59, 130, 246, 0.15)';
-    ctx.lineWidth = 4;
-    ctx.lineJoin = 'round';
-    ctx.beginPath();
-    spline.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
-    ctx.stroke();
-    ctx.restore();
-
-    // --- Main curve ---
-    const lineGrad = ctx.createLinearGradient(spline[0].x, 0, spline[spline.length - 1].x, 0);
-    lineGrad.addColorStop(0, '#60a5fa');
-    lineGrad.addColorStop(0.5, '#a78bfa');
-    lineGrad.addColorStop(1, '#818cf8');
-    ctx.strokeStyle = lineGrad;
-    ctx.lineWidth = 2;
-    ctx.lineJoin = 'round';
-    ctx.beginPath();
-    spline.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
-    ctx.stroke();
-
-    // --- Data points (small, refined) ---
-    normData.forEach(d => {
-        const x = toX(d.cpd);
-        const y = toY(d.dB);
-        const color = d.dB >= 0 ? '#34d399' : '#f87171';
-        // Small dot matching curve weight
-        ctx.beginPath();
-        ctx.arc(x, y, 2.5, 0, Math.PI * 2);
-        ctx.fillStyle = color;
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(255,255,255,0.6)';
-        ctx.lineWidth = 0.75;
-        ctx.stroke();
-    });
-
-    // --- X-axis: dual labels ---
-    // Technical: cpd values at each data point
-    ctx.fillStyle = 'rgba(255,255,255,0.45)';
-    ctx.font = `9px ${font}`;
-    ctx.textAlign = 'center';
-    normData.forEach(d => {
-        const x = toX(d.cpd);
-        ctx.fillText(d.cpd < 1 ? d.cpd.toFixed(2) : d.cpd.toFixed(1), x, mt + ph + 13);
-    });
-    // Snellen equivalents
-    ctx.fillStyle = 'rgba(255,255,255,0.25)';
-    ctx.font = `7.5px ${font}`;
-    normData.forEach(d => {
-        const x = toX(d.cpd);
-        const denomLabel = Number.isInteger(d.denom) ? d.denom : Math.round(d.denom);
-        ctx.fillText(`20/${denomLabel}`, x, mt + ph + 23);
-    });
-    // Technical axis title
-    ctx.fillStyle = 'rgba(255,255,255,0.3)';
-    ctx.font = `8px ${font}`;
-    ctx.fillText('Spatial Frequency (cpd)', ml + pw / 2, mt + ph + 36);
-    // Layman axis: coarse ←→ fine
-    ctx.font = `bold 7.5px ${font}`;
-    ctx.textAlign = 'left';
-    ctx.fillStyle = 'rgba(255,255,255,0.2)';
-    ctx.fillText('COARSE', ml, mt + ph + 50);
-    ctx.textAlign = 'center';
-    ctx.fillText('Detail \u2192', ml + pw / 2, mt + ph + 50);
-    ctx.textAlign = 'right';
-    ctx.fillText('FINE', ml + pw, mt + ph + 50);
-
-    // --- Y-axis: dual labels ---
-    ctx.font = `9px ${font}`;
-    ctx.textAlign = 'right';
-    for (let dB = yMin; dB <= yMax; dB += 5) {
-        const y = toY(dB);
-        const label = (dB > 0 ? '+' : '') + dB;
-        ctx.fillStyle = dB > 0 ? 'rgba(52, 211, 153, 0.5)'
-                      : dB < 0 ? 'rgba(248, 113, 113, 0.5)'
-                      : 'rgba(255,255,255,0.4)';
-        ctx.fillText(label + ' dB', ml - 5, y + 3);
+    // Label
+    const normLabelX = normPts[Math.round(normPts.length * 0.15)];
+    if (normLabelX) {
+        ctx.fillStyle = 'rgba(255,255,255,0.25)';
+        ctx.font = `8px ${font}`;
+        ctx.textAlign = 'left';
+        ctx.fillText('Average', normLabelX.x + 4, normLabelX.y - 6);
     }
-    // Technical axis title
+
+    // --- Reference overlays ---
+    activeCSFRefs.forEach(refKey => {
+        const ref = CSF_REFERENCES[refKey];
+        if (!ref) return;
+        const refPts = sampleCurve(cpd => csfRefCurve(ref, cpd), 80);
+        ctx.strokeStyle = ref.color + '55';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        refPts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Label
+        const lp = refPts[Math.round(refPts.length * 0.82)];
+        if (lp) {
+            ctx.fillStyle = ref.color + '88';
+            ctx.font = `7px ${font}`;
+            ctx.textAlign = 'right';
+            ctx.fillText(ref.label, lp.x - 4, lp.y - 5);
+        }
+    });
+
+    // --- Patient spline (raw CS) ---
+    const patientPts = results.map(r => ({ x: toX(r.cpd), y: toY(r.sensitivity) }));
+    // Extend line to y-axis: extrapolate from first two points
+    if (patientPts.length >= 2) {
+        const dx = patientPts[1].x - patientPts[0].x;
+        const dy = patientPts[1].y - patientPts[0].y;
+        const extX = ml;
+        const extSteps = (patientPts[0].x - ml) / (dx || 1);
+        const extY = patientPts[0].y - dy * extSteps;
+        patientPts.unshift({ x: ml, y: Math.max(mt, Math.min(mt + ph, extY)) });
+    }
+    const spline = catmullRomSpline(patientPts, 24);
+
+    // --- Green/red fill between patient and normative ---
+    // Sample normative at each spline x position
+    for (let fillPass = 0; fillPass < 2; fillPass++) {
+        // fillPass 0 = above norm (green), 1 = below norm (red)
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(ml, mt, pw, ph);
+        ctx.clip();
+
+        const fillColor = fillPass === 0
+            ? 'rgba(52, 211, 153, 0.18)'
+            : 'rgba(248, 113, 113, 0.18)';
+
+        ctx.fillStyle = fillColor;
+        ctx.beginPath();
+
+        // Walk the spline, build fill polygon between patient and norm
+        let started = false;
+        spline.forEach(p => {
+            // Find cpd at this x position
+            const logCpd = logCpdMin + (p.x - ml) / pw * (logCpdMax - logCpdMin);
+            const cpd = Math.pow(10, logCpd);
+            const normY = toY(csfNormative(cpd));
+
+            const above = p.y < normY; // canvas y is inverted
+            if ((fillPass === 0 && above) || (fillPass === 1 && !above)) {
+                if (!started) { ctx.moveTo(p.x, normY); started = true; }
+                ctx.lineTo(p.x, p.y);
+            } else if (started) {
+                ctx.lineTo(p.x, normY);
+                ctx.closePath();
+                ctx.fill();
+                ctx.beginPath();
+                started = false;
+            }
+        });
+        if (started) {
+            // Close back to norm line
+            const lastP = spline[spline.length - 1];
+            const lastLogCpd = logCpdMin + (lastP.x - ml) / pw * (logCpdMax - logCpdMin);
+            ctx.lineTo(lastP.x, toY(csfNormative(Math.pow(10, lastLogCpd))));
+            ctx.closePath();
+            ctx.fill();
+        }
+        ctx.restore();
+    }
+
+    // --- Patient curve glow ---
     ctx.save();
-    ctx.translate(11, mt + ph / 2);
-    ctx.rotate(-Math.PI / 2);
-    ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(255,255,255,0.25)';
-    ctx.font = `8px ${font}`;
-    ctx.fillText('Contrast Sensitivity vs. Average', 0, 0);
-    ctx.restore();
-    // Layman axis: contrast description
-    ctx.save();
-    ctx.translate(ml + pw + 42, mt + ph / 2);
-    ctx.rotate(-Math.PI / 2);
-    ctx.textAlign = 'center';
-    ctx.font = `bold 7.5px ${font}`;
-    ctx.fillStyle = 'rgba(255,255,255,0.15)';
-    ctx.fillText('needs bold \u2190  Contrast  \u2192 sees faint', 0, 0);
+    ctx.shadowColor = 'rgba(96, 165, 250, 0.3)';
+    ctx.shadowBlur = 10;
+    ctx.strokeStyle = 'rgba(96, 165, 250, 0.12)';
+    ctx.lineWidth = 5;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    spline.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+    ctx.stroke();
     ctx.restore();
 
-    // --- Better / Worse ---
-    ctx.font = `bold 8px ${font}`;
+    // --- Patient curve ---
+    ctx.strokeStyle = '#60a5fa';
+    ctx.lineWidth = 2.5;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    spline.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+    ctx.stroke();
+
+    // --- X-axis labels ---
+    ctx.font = `9px ${font}`;
+    ctx.textAlign = 'center';
+    const xTicks = [0.3, 0.5, 0.7, 1.0, 1.5, 2.0, 3.0];
+    xTicks.forEach(cpd => {
+        const x = toX(cpd);
+        ctx.fillStyle = 'rgba(255,255,255,0.4)';
+        ctx.fillText(cpd < 1 ? cpd.toFixed(1) : cpd.toFixed(1), x, mt + ph + 14);
+    });
+    // Snellen equivalents at data points
+    ctx.fillStyle = 'rgba(255,255,255,0.22)';
+    ctx.font = `7.5px ${font}`;
+    results.forEach(r => {
+        const x = toX(r.cpd);
+        const dl = Number.isInteger(r.denom) ? r.denom : Math.round(r.denom);
+        ctx.fillText(`20/${dl}`, x, mt + ph + 24);
+    });
+    // Title + layman
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    ctx.font = `8px ${font}`;
+    ctx.fillText('Spatial Frequency (cpd)', ml + pw / 2, mt + ph + 37);
+    ctx.font = `bold 7px ${font}`;
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.textAlign = 'left';
+    ctx.fillText('COARSE', ml, mt + ph + 49);
+    ctx.textAlign = 'center';
+    ctx.fillText('Detail \u2192', ml + pw / 2, mt + ph + 49);
     ctx.textAlign = 'right';
-    ctx.fillStyle = 'rgba(52, 211, 153, 0.3)';
-    ctx.fillText('BETTER \u25B2', ml + pw - 4, mt + 12);
-    ctx.fillStyle = 'rgba(248, 113, 113, 0.3)';
-    ctx.fillText('WORSE \u25BC', ml + pw - 4, mt + ph - 5);
+    ctx.fillText('FINE', ml + pw, mt + ph + 49);
+
+    // --- Y-axis labels ---
+    ctx.font = `9px ${font}`;
+    ctx.textAlign = 'right';
+    [1, 2, 5, 10, 20, 50, 100].forEach(cs => {
+        const y = toY(cs);
+        if (y < mt || y > mt + ph) return;
+        ctx.fillStyle = 'rgba(255,255,255,0.35)';
+        ctx.fillText(cs, ml - 6, y + 3);
+    });
+    // Title + layman
+    ctx.save();
+    ctx.translate(12, mt + ph / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+    ctx.font = `8px ${font}`;
+    ctx.fillText('Contrast Sensitivity', 0, 0);
+    ctx.restore();
+    ctx.save();
+    ctx.translate(ml - 42, mt + ph / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = 'center';
+    ctx.font = `bold 7px ${font}`;
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx.fillText('needs bold \u2190\u2192 sees faint', 0, 0);
+    ctx.restore();
+
+    // --- "You" label near patient curve peak ---
+    const peakPt = patientPts.reduce((best, p) => p.y < best.y ? p : best, patientPts[0]);
+    ctx.fillStyle = '#60a5fa';
+    ctx.font = `bold 9px ${font}`;
+    ctx.textAlign = 'center';
+    ctx.fillText('You', peakPt.x, peakPt.y - 10);
 }
 
 function initLuminanceCalibration() {
