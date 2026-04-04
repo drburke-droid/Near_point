@@ -1848,16 +1848,33 @@ function getCapHeightRatio(fontFamily) {
     return 0.72;
 }
 
+const BANNED_SUBSTRINGS = [
+    'FUC', 'FUK', 'FUN', 'CUN', 'NUT', 'TIT', 'PEN', 'HUP',
+    'DIE', 'DIC', 'COC', 'COD', 'HOE', 'HOR', 'PEE', 'POO',
+    'FAP', 'FAT', 'FED', 'POD', 'NIP', 'TET', 'NUD', 'NUB',
+    'DON', 'DOP', 'COP', 'CON', 'PUD', 'PUN', 'RUN', 'RUT',
+    'HUN', 'DUH', 'DEN', 'END'
+];
+
+function containsBanned(letters) {
+    const str = letters.join('');
+    return BANNED_SUBSTRINGS.some(b => str.includes(b));
+}
+
 function pickFromPool(pool, count) {
-    const letters = [];
-    for (let i = 0; i < count; i++) {
-        let pick;
-        do {
-            pick = pool[Math.floor(Math.random() * pool.length)];
-        } while (i > 0 && pick === letters[i - 1]);
-        letters.push(pick);
+    for (let attempt = 0; attempt < 50; attempt++) {
+        const letters = [];
+        for (let i = 0; i < count; i++) {
+            let pick;
+            do {
+                pick = pool[Math.floor(Math.random() * pool.length)];
+            } while (i > 0 && pick === letters[i - 1]);
+            letters.push(pick);
+        }
+        if (!containsBanned(letters)) return letters;
     }
-    return letters;
+    // Fallback: just return the last attempt (extremely unlikely to reach here)
+    return pickFromPool(pool, count);
 }
 
 function pickSnellenLetters() {
