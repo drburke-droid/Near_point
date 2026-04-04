@@ -282,6 +282,91 @@
             color: rgba(255,255,255,0.7);
         }
 
+        .line-ctrl-hint {
+            font-size: 0.8rem;
+            color: rgba(255,255,255,0.4);
+            margin-bottom: 16px;
+        }
+
+        .line-ctrl-row {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+
+        .btn-line-ctrl {
+            width: 56px;
+            height: 56px;
+            border-radius: 12px;
+            border: 2px solid rgba(255,255,255,0.15);
+            background: rgba(255,255,255,0.06);
+            color: rgba(255,255,255,0.8);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s;
+            font-family: inherit;
+        }
+
+        .btn-line-ctrl:hover {
+            background: rgba(255,255,255,0.12);
+            color: white;
+            border-color: rgba(255,255,255,0.3);
+        }
+
+        .btn-line-ctrl:active {
+            transform: scale(0.95);
+        }
+
+        .line-ctrl-indicator {
+            font-size: 1.3rem;
+            font-weight: 800;
+            color: white;
+            background: var(--gradient-glow);
+            padding: 10px 24px;
+            border-radius: 100px;
+            min-width: 120px;
+            text-align: center;
+        }
+
+        .btn-line-ctrl-wide {
+            width: 100%;
+            padding: 14px;
+            border-radius: 12px;
+            border: 2px solid rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.05);
+            color: rgba(255,255,255,0.7);
+            font-family: inherit;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .btn-line-ctrl-wide:hover {
+            background: rgba(255,255,255,0.1);
+            color: white;
+        }
+
+        .btn-csf-launch {
+            background: rgba(245, 158, 11, 0.1);
+            border-color: rgba(245, 158, 11, 0.3);
+            color: rgba(245, 180, 60, 0.9);
+        }
+
+        .btn-csf-launch:hover {
+            background: rgba(245, 158, 11, 0.2);
+            color: rgba(245, 200, 80, 1);
+        }
+
         .hidden { display: none !important; }
 
         /* Pass 3 suggestion */
@@ -697,10 +782,24 @@
     </div>
 
     <div class="main">
-        <!-- Waiting state -->
-        <div id="waiting-panel" class="waiting-message">
-            <h2>Waiting for patient display...</h2>
-            <p>The CSF test will begin momentarily.</p>
+        <!-- Line controls (always visible when no CSF test running) -->
+        <div id="waiting-panel">
+            <div class="section-label">Line Controls</div>
+            <p class="line-ctrl-hint">Control the patient display from here.</p>
+            <div class="line-ctrl-row">
+                <button class="btn-line-ctrl" id="btn-line-up" title="Larger letters">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 15l-6-6-6 6"/></svg>
+                </button>
+                <div class="line-ctrl-indicator" id="line-ctrl-indicator">20/40</div>
+                <button class="btn-line-ctrl" id="btn-line-down" title="Smaller letters">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+                </button>
+            </div>
+            <button class="btn-line-ctrl-wide" id="btn-line-refresh">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                New Letters
+            </button>
+            <button class="btn-line-ctrl-wide btn-csf-launch" id="btn-csf-remote">Start CSF Test</button>
         </div>
 
         <!-- Active test panel -->

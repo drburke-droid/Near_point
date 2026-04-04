@@ -617,12 +617,11 @@ document.addEventListener('DOMContentLoaded', () => {
     setupCalibrationScreen();
     setupInputScreen();
     setupTestScreen();
+    setupWelcomeScreen();
+    setupDistanceCalScreen();
 
-    if (state.cssPixelsPerMm) {
-        showScreen('input');
-    } else {
-        showScreen('calibration');
-    }
+    // Always start at welcome screen
+    showScreen('welcome');
 });
 
 function showScreen(name) {
@@ -631,6 +630,163 @@ function showScreen(name) {
 
     if (name === 'input') {
         updateConfigSummary();
+    }
+}
+
+// ==========================================
+// WELCOME SCREEN
+// ==========================================
+
+function setupWelcomeScreen() {
+    $('#mode-near-btn').addEventListener('click', () => {
+        if (state.cssPixelsPerMm) {
+            showScreen('input');
+        } else {
+            showScreen('calibration');
+        }
+    });
+
+    $('#mode-distance-btn').addEventListener('click', () => {
+        showScreen('distance-cal');
+    });
+}
+
+// ==========================================
+// DISTANCE CALIBRATION SCREEN
+// ==========================================
+
+function setupDistanceCalScreen() {
+    const cardEl = $('#dist-cal-card');
+    const sizeSlider = $('#dist-cal-slider');
+    const sizeReadout = $('#dist-cal-readout');
+    const gammaSlider = $('#dist-cal-gamma');
+    const gammaReadout = $('#dist-cal-gamma-readout');
+    const circleEl = $('#dist-cal-circle');
+
+    // Restore saved values
+    const savedGamma = localStorage.getItem('nearpoint_gamma_grey');
+    if (savedGamma) {
+        gammaSlider.value = savedGamma;
+        circleEl.style.backgroundColor = `rgb(${savedGamma},${savedGamma},${savedGamma})`;
+        gammaReadout.textContent = savedGamma;
+    }
+
+    const savedPxPerMm = localStorage.getItem('nearpoint_dist_px_per_mm');
+    if (savedPxPerMm) {
+        const px = parseFloat(savedPxPerMm) * 85.6;
+        sizeSlider.value = px;
+        cardEl.style.width = px + 'px';
+        cardEl.style.height = (px / 1.585) + 'px';
+        sizeReadout.textContent = Math.round(px) + ' px';
+    }
+
+    // Credit card size slider
+    sizeSlider.addEventListener('input', () => {
+        const px = parseFloat(sizeSlider.value);
+        cardEl.style.width = px + 'px';
+        cardEl.style.height = (px / 1.585) + 'px';
+        sizeReadout.textContent = Math.round(px) + ' px';
+    });
+
+    // Gamma slider
+    gammaSlider.addEventListener('input', () => {
+        const v = gammaSlider.value;
+        circleEl.style.backgroundColor = `rgb(${v},${v},${v})`;
+        gammaReadout.textContent = v;
+    });
+
+    // Back button
+    $('#dist-cal-back').addEventListener('click', () => showScreen('welcome'));
+
+    // Start distance testing
+    $('#dist-cal-start').addEventListener('click', () => {
+        // Save calibration
+        const pxPerMm = parseFloat(sizeSlider.value) / 85.6;
+        localStorage.setItem('nearpoint_dist_px_per_mm', pxPerMm);
+        localStorage.setItem('nearpoint_gamma_grey', gammaSlider.value);
+
+        // Apply to state
+        state.cssPixelsPerMm = pxPerMm;
+
+        // Set testing distance from input
+        const distVal = parseFloat($('#dist-cal-distance').value) || 20;
+        const distUnit = $('#dist-cal-dist-unit').value;
+
+        // Show test screen, switch to distance tab, set distance
+        showScreen('test');
+
+        // Activate distance tab
+        const distTab = $('[data-tab="distance"]');
+        if (distTab) distTab.click();
+
+        // Set distance slider values
+        const slider = $('#distance-test-slider');
+        const unitToggle = $('#distance-test-unit');
+        if (distUnit === 'm') {
+            unitToggle.dataset.unit = 'm';
+            unitToggle.textContent = 'm';
+            slider.min = 1.5; slider.max = 12; slider.step = 0.1;
+            slider.value = distVal;
+        } else {
+            unitToggle.dataset.unit = 'ft';
+            unitToggle.textContent = 'ft';
+            slider.min = 5; slider.max = 40; slider.step = 0.5;
+            slider.value = distVal;
+        }
+        $('#distance-test-value').textContent = parseFloat(slider.value).toFixed(1);
+        renderDistanceTest();
+
+        // Set up persistent channel and launch clinician
+        setupDistanceChannel();
+        launchClinicianWindow();
+    });
+}
+
+let clinicianWindow = null;
+let distanceChannel = null; // persistent channel for line controls
+
+function setupDistanceChannel() {
+    if (distanceChannel) return;
+    distanceChannel = new BroadcastChannel('nearpoint-csf');
+    distanceChannel.onmessage = (e) => {
+        const data = e.data;
+        // Line control messages from clinician
+        switch (data.type) {
+            case 'line-up':
+                if (!csfState.active) $('#snellen-up-btn').click();
+                break;
+            case 'line-down':
+                if (!csfState.active) $('#snellen-down-btn').click();
+                break;
+            case 'line-refresh':
+                if (!csfState.active) $('#snellen-refresh-btn').click();
+                break;
+            case 'csf-start-remote':
+                if (!csfState.active) csfStartTest();
+                break;
+            default:
+                // Forward CSF messages to the CSF handler
+                csfHandleClinicianMessage(data);
+                break;
+        }
+    };
+}
+
+// Broadcast current line indicator to clinician
+function broadcastLineUpdate() {
+    if (distanceChannel) {
+        const indicator = $('#snellen-indicator');
+        if (indicator) {
+            distanceChannel.postMessage({ type: 'line-update', indicator: indicator.textContent });
+        }
+    }
+}
+
+function launchClinicianWindow() {
+    if (!clinicianWindow || clinicianWindow.closed) {
+        clinicianWindow = window.open('clinician.html', 'csf-clinician', 'width=700,height=900');
+    } else {
+        clinicianWindow.focus();
     }
 }
 
@@ -1764,6 +1920,7 @@ function renderDistanceTest() {
 
     // Update indicator
     $('#snellen-indicator').textContent = indicatorText;
+    broadcastLineUpdate();
 
     // Calculate letter color from contrast (Weber contrast on white background)
     // C = (Lb - Lt) / Lb, so Lt = Lb * (1 - C)
@@ -1952,12 +2109,14 @@ function csfStartTest() {
     csfState.waitingForClinician = false;
 
     // Open BroadcastChannel
-    if (csfState.channel) csfState.channel.close();
-    csfState.channel = new BroadcastChannel('nearpoint-csf');
-    csfState.channel.onmessage = (e) => csfHandleClinicianMessage(e.data);
+    // Reuse the persistent distance channel
+    setupDistanceChannel();
+    csfState.channel = distanceChannel;
 
     // Open clinician window
-    csfState.clinicianWindow = window.open('clinician.html', 'csf-clinician', 'width=700,height=850');
+    // Reuse existing clinician window if already open
+    launchClinicianWindow();
+    csfState.clinicianWindow = clinicianWindow;
 
     // Update UI to CSF mode
     csfUpdateUI();
@@ -1969,10 +2128,7 @@ function csfStartTest() {
 function csfStopTest() {
     csfBroadcast('csf-cancel', {});
     csfState.active = false;
-    if (csfState.channel) {
-        csfState.channel.close();
-        csfState.channel = null;
-    }
+    csfState.channel = null; // don't close — persistent channel stays open
     csfState.clinicianWindow = null;
     csfUpdateUI();
     renderDistanceTest();

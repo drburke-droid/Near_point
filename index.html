@@ -15,7 +15,43 @@
 </head>
 <body>
 
-    <!-- ========== CALIBRATION SCREEN ========== -->
+    <!-- ========== WELCOME / MODE SELECT SCREEN ========== -->
+    <div id="welcome-screen" class="screen">
+        <div class="hero-banner">
+            <div class="hero-banner-bg"></div>
+            <div class="container hero-banner-content">
+                <img src="logo.png" alt="Logo" class="logo logo-light hero-logo">
+                <h1>Visual Assessment Suite</h1>
+                <p class="subtitle">Select a testing mode to begin.</p>
+            </div>
+        </div>
+        <div class="container">
+            <div class="mode-select-grid">
+                <button class="mode-card animate-in" id="mode-near-btn">
+                    <div class="mode-icon">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
+                            <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+                        </svg>
+                    </div>
+                    <h2>Near Testing</h2>
+                    <p>Near point add, reading samples, occupation tasks</p>
+                </button>
+                <button class="mode-card animate-in" id="mode-distance-btn" style="animation-delay:0.08s">
+                    <div class="mode-icon">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                            <circle cx="12" cy="12" r="3"/>
+                        </svg>
+                    </div>
+                    <h2>Distance Testing</h2>
+                    <p>Snellen acuity, contrast sensitivity (CSF)</p>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========== CALIBRATION SCREEN (Near testing) ========== -->
     <div id="calibration-screen" class="screen">
         <div class="hero-banner">
             <div class="hero-banner-bg"></div>
@@ -89,6 +125,88 @@
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
                 <span><strong id="calibration-device-name"></strong> &mdash; <span id="calibration-ppmm"></span> CSS px/mm</span>
                 <button id="recalibrate-inline" class="btn btn-small btn-ghost">Change</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========== DISTANCE CALIBRATION SCREEN ========== -->
+    <div id="distance-cal-screen" class="screen hidden">
+        <div class="hero-banner">
+            <div class="hero-banner-bg"></div>
+            <div class="container hero-banner-content">
+                <img src="logo.png" alt="Logo" class="logo logo-light hero-logo">
+                <h1>Distance Display Calibration</h1>
+                <p class="subtitle">Calibrate your screen for accurate letter sizing and contrast.</p>
+            </div>
+        </div>
+        <div class="container">
+            <div class="dist-cal-grid">
+                <!-- Credit card size calibration -->
+                <div class="card card-elevated animate-in">
+                    <div class="card-header">
+                        <div class="card-icon">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+                        </div>
+                        <h2>Screen Size</h2>
+                    </div>
+                    <p class="card-desc">Place a credit card on screen. Adjust until the outline matches exactly.</p>
+                    <div class="calibration-area">
+                        <div id="dist-cal-card" class="dist-cal-card">
+                            <span class="card-label">CREDIT CARD</span>
+                            <span class="card-dimensions">85.6 mm &times; 54.0 mm</span>
+                        </div>
+                    </div>
+                    <div class="slider-row">
+                        <label>Size:</label>
+                        <input type="range" id="dist-cal-slider" min="150" max="750" value="300" step="0.5">
+                        <span id="dist-cal-readout">300 px</span>
+                    </div>
+                </div>
+
+                <!-- Luminance calibration -->
+                <div class="card card-elevated animate-in" style="animation-delay:0.08s">
+                    <div class="card-header">
+                        <div class="card-icon">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="12" cy="12" r="5"/>
+                                <line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+                                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+                                <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+                                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+                            </svg>
+                        </div>
+                        <h2>Luminance</h2>
+                    </div>
+                    <p class="card-desc">Adjust until the inner circle disappears into the checkerboard.</p>
+                    <div class="luminance-check-area">
+                        <div class="dist-cal-checker">
+                            <div id="dist-cal-circle" class="dist-cal-inner-circle"></div>
+                        </div>
+                    </div>
+                    <div class="slider-row">
+                        <label>Gamma:</label>
+                        <input type="range" id="dist-cal-gamma" min="60" max="220" value="128" step="1">
+                        <span id="dist-cal-gamma-readout">128</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Distance input + launch -->
+            <div class="card card-elevated animate-in dist-cal-launch" style="animation-delay:0.16s">
+                <div class="dist-cal-distance-row">
+                    <label for="dist-cal-distance">Testing Distance</label>
+                    <div class="input-with-unit">
+                        <input type="number" id="dist-cal-distance" value="20" min="1" step="0.5">
+                        <select id="dist-cal-dist-unit">
+                            <option value="ft" selected>ft</option>
+                            <option value="m">m</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="dist-cal-actions">
+                    <button id="dist-cal-start" class="btn btn-primary btn-large">Begin Distance Testing</button>
+                    <button id="dist-cal-back" class="btn btn-ghost btn-small">Back</button>
+                </div>
             </div>
         </div>
     </div>
@@ -305,9 +423,7 @@
 
                 <!-- CSF Test start button -->
                 <button id="csf-start-btn" class="btn-snellen csf-start-btn" title="Start CSF Test">
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <text x="2" y="16" font-size="10" font-weight="700" fill="currentColor" stroke="none" font-family="Arial">CSF</text>
-                    </svg>
+                    <span style="font-size:16px;font-weight:800;letter-spacing:0.05em">CSF</span>
                 </button>
 
                 <!-- CSF Test stop button (hidden by default) -->

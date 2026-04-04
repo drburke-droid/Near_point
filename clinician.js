@@ -121,6 +121,13 @@ channel.onmessage = (e) => {
         case 'csf-cancel':
             showCancelled();
             break;
+        case 'line-update':
+            // Patient display reports current line info
+            if (data.indicator) {
+                const ind = $('#line-ctrl-indicator');
+                if (ind) ind.textContent = data.indicator;
+            }
+            break;
     }
 };
 
@@ -847,4 +854,21 @@ $('#btn-save-results').addEventListener('click', saveCurrentResults);
 
 $('#btn-copy-results').addEventListener('click', () => {
     copyResultsToClipboard(lastCompletedResults, activePatient, new Date());
+});
+
+// --- Line controls (remote control for patient display) ---
+$('#btn-line-up').addEventListener('click', () => {
+    channel.postMessage({ type: 'line-up' });
+});
+
+$('#btn-line-down').addEventListener('click', () => {
+    channel.postMessage({ type: 'line-down' });
+});
+
+$('#btn-line-refresh').addEventListener('click', () => {
+    channel.postMessage({ type: 'line-refresh' });
+});
+
+$('#btn-csf-remote').addEventListener('click', () => {
+    channel.postMessage({ type: 'csf-start-remote' });
 });
