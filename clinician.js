@@ -149,7 +149,10 @@ function showLine(data) {
     lettersGrid.innerHTML = '';
     data.letters.forEach((letter, i) => {
         const contrast = data.contrasts[i];
-        const gray = Math.round(255 * (1 - contrast / 100));
+        // Clinician view: boost contrast so letters are always readable
+        // Map patient contrast (1.25-100%) to clinician gray (0-160) so even
+        // the faintest letters are still clearly visible as dark gray
+        const clinicianGray = Math.round(160 * (1 - Math.min(1, contrast / 100)));
         const contrastLabel = contrast < 10 ? contrast.toFixed(1) + '%' : Math.round(contrast) + '%';
 
         const cell = document.createElement('div');
@@ -157,7 +160,7 @@ function showLine(data) {
 
         const display = document.createElement('div');
         display.className = 'letter-display';
-        display.style.color = `rgb(${gray}, ${gray}, ${gray})`;
+        display.style.color = `rgb(${clinicianGray}, ${clinicianGray}, ${clinicianGray})`;
         display.textContent = letter;
 
         const label = document.createElement('div');

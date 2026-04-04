@@ -584,9 +584,7 @@ let blLetters = [];
 let contrastPercent = 100; // Weber contrast percentage
 
 // --- CSF Test State ---
-// Pass 1: coarse grid across the spatial frequency range
-const CSF_COARSE_LEVELS = [100, 70, 50, 40, 30, 25];
-const CSF_EXTENSION_LEVELS = [20, 15, 10]; // extended if patient is still performing well
+const CSF_ALL_LEVELS = [100, 70, 50, 40, 30, 25, 20, 15, 10]; // full range, tested top-down
 const CSF_LETTERS_PER_LINE = 8;
 const CSF_MIN_CONTRAST = 1.25; // Display floor %
 
@@ -1831,31 +1829,18 @@ function csfComputeContrasts(startContrast, endContrast, count) {
 
 function csfAdaptiveStart(levelIndex) {
     const denom = csfState.levels[levelIndex];
-    const isExtension = denom <= 20; // beyond 20/20 — above-average territory
-
-    if (csfState.pass === 2) {
+    if (csfState.pass >= 2) {
         const expected = csfInterpolateThreshold(denom);
         if (expected != null) {
-            // For extension levels in pass 2, use wider range to probe their limits
-            const mult = isExtension ? 3.0 : 1.8;
-            const floor = isExtension ? 30 : 0;
-            return Math.min(100, Math.max(floor, expected * mult));
+            return Math.min(100, expected * 1.8);
         }
     }
     if (levelIndex === 0) return 100;
     // Pass 1: use previous level's threshold to adapt starting contrast
     const prevDenom = csfState.levels[levelIndex - 1];
     const prevResult = csfState.results[prevDenom];
-    if (prevResult) {
-        const prevThreshold = prevResult.coarseThreshold;
-        if (prevThreshold != null) {
-            // Extension levels: always start at minimum 50% to really push them
-            // This ensures we probe a wide contrast range, not just near-threshold
-            if (isExtension) {
-                return Math.max(50, Math.min(100, prevThreshold * 3.0));
-            }
-            return Math.min(100, prevThreshold * 2.0);
-        }
+    if (prevResult && prevResult.coarseThreshold != null) {
+        return Math.min(100, prevResult.coarseThreshold * 2.0);
     }
     return 100;
 }
@@ -1879,7 +1864,7 @@ function csfInterpolateThreshold(denom) {
     if (result && result.coarseThreshold != null) return result.coarseThreshold;
 
     // Find nearest coarse results above and below this denom
-    const coarseKeys = CSF_COARSE_LEVELS.filter(d => csfState.results[d] && csfState.results[d].coarseThreshold != null);
+    const coarseKeys = CSF_ALL_LEVELS.filter(d => csfState.results[d] && csfState.results[d].coarseThreshold != null);
     if (coarseKeys.length === 0) return null;
 
     const above = coarseKeys.filter(d => d > denom).sort((a, b) => a - b)[0];
@@ -1929,32 +1914,7 @@ function csfGenerateRefinedLevels() {
     return levels.sort((a, b) => b - a);
 }
 
-// Check if the patient is performing at or above average at the smallest tested level
-function csfShouldExtend() {
-    // Only extend during pass 1, and only if we haven't already added all extensions
-    const smallest = csfState.levels[csfState.levels.length - 1];
-    if (smallest <= CSF_EXTENSION_LEVELS[CSF_EXTENSION_LEVELS.length - 1]) return false;
 
-    const result = csfState.results[smallest];
-    if (!result || result.coarseThreshold == null) return false;
-
-    const cpd = 30 / smallest;
-    const sensitivity = 100 / result.coarseThreshold;
-    const norm = csfNormative(cpd);
-    const dB = 10 * Math.log10(Math.max(0.01, sensitivity) / norm);
-
-    // Extend if patient is within 3 dB of average (not significantly below)
-    return dB >= -3;
-}
-
-// Get the next extension level that hasn't been tested yet
-function csfNextExtensionLevel() {
-    const tested = new Set(csfState.levels);
-    for (const ext of CSF_EXTENSION_LEVELS) {
-        if (!tested.has(ext)) return ext;
-    }
-    return null;
-}
 
 function csfEstimateThreshold(contrasts, errors) {
     // Find the last correctly identified letter (lowest contrast correct)
@@ -1987,7 +1947,7 @@ function csfStartTest() {
     csfState.active = true;
     csfState.pass = 1;
     csfState.levelIndex = 0;
-    csfState.levels = [...CSF_COARSE_LEVELS]; // pass 1 uses coarse grid
+    csfState.levels = [...CSF_ALL_LEVELS]; // pass 1 walks the full range
     csfState.results = {};
     csfState.waitingForClinician = false;
 
@@ -2050,6 +2010,7 @@ function csfNextLine() {
 
 function csfProcessResponse(errors) {
     const denom = csfState.levels[csfState.levelIndex];
+    const allWrong = errors.every(e => e === 1);
     const threshold = csfEstimateThreshold(csfState.currentContrasts, errors);
 
     // Store result — pass 3 overwrites refined threshold for retested levels
@@ -2064,28 +2025,22 @@ function csfProcessResponse(errors) {
 
     csfState.waitingForClinician = false;
 
-    // Advance to next level
+    // In pass 1: if patient got 0 correct, stop descending — they've hit their limit
+    const hitFloor = csfState.pass === 1 && allWrong;
+
+    // Advance to next level (unless floored)
     csfState.levelIndex++;
 
-    if (csfState.levelIndex >= csfState.levels.length) {
+    if (hitFloor || csfState.levelIndex >= csfState.levels.length) {
         if (csfState.pass === 1) {
-            // Check if we should extend into 20/20, 20/15, 20/10
-            if (csfShouldExtend()) {
-                const nextExt = csfNextExtensionLevel();
-                if (nextExt != null) {
-                    csfState.levels.push(nextExt);
-                    // levelIndex already points to the new entry
-                    csfNextLine();
-                    return;
-                }
-            }
-            // Generate refined levels with interpolated sizes where CSF changes most
+            // Trim untested levels from pass 1 if we stopped early
+            const testedLevels = csfState.levels.slice(0, csfState.levelIndex);
+            // Generate refined levels from what was actually tested
             csfState.pass = 2;
             csfState.levels = csfGenerateRefinedLevels();
             csfState.levelIndex = 0;
             csfNextLine();
         } else {
-            // Pass 2 or 3 done — run noise check (pass 3 goes straight to finalize)
             csfComplete();
         }
     } else {
