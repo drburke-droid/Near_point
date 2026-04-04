@@ -2454,11 +2454,10 @@ function renderCSFGraph(canvas, results) {
     ctx.scale(dpr, dpr);
 
     const font = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-
     ctx.clearRect(0, 0, w, h);
 
-    // Margins
-    const ml = 58, mr = 50, mt = 30, mb = 55;
+    // Margins — extra room for dual labels
+    const ml = 58, mr = 50, mt = 24, mb = 62;
     const pw = w - ml - mr;
     const ph = h - mt - mb;
 
@@ -2481,194 +2480,191 @@ function renderCSFGraph(canvas, results) {
 
     function toX(cpd) { return ml + pw * (Math.log10(cpd) - logCpdMin) / (logCpdMax - logCpdMin); }
     function toY(dB) { return mt + ph * (1 - (dB - yMin) / (yMax - yMin)); }
-
     const zeroY = toY(0);
 
     // --- Background gradient zones ---
     const greenGrad = ctx.createLinearGradient(0, mt, 0, zeroY);
-    greenGrad.addColorStop(0, 'rgba(16, 185, 129, 0.12)');
-    greenGrad.addColorStop(1, 'rgba(16, 185, 129, 0.02)');
+    greenGrad.addColorStop(0, 'rgba(16, 185, 129, 0.10)');
+    greenGrad.addColorStop(1, 'rgba(16, 185, 129, 0.01)');
     ctx.fillStyle = greenGrad;
     ctx.fillRect(ml, mt, pw, zeroY - mt);
-
     const redGrad = ctx.createLinearGradient(0, zeroY, 0, mt + ph);
-    redGrad.addColorStop(0, 'rgba(239, 68, 68, 0.02)');
-    redGrad.addColorStop(1, 'rgba(239, 68, 68, 0.12)');
+    redGrad.addColorStop(0, 'rgba(239, 68, 68, 0.01)');
+    redGrad.addColorStop(1, 'rgba(239, 68, 68, 0.10)');
     ctx.fillStyle = redGrad;
     ctx.fillRect(ml, zeroY, pw, mt + ph - zeroY);
 
-    // --- Grid ---
-    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    // --- Fine grid ---
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
     ctx.lineWidth = 0.5;
-    for (let lv = Math.floor(logCpdMin * 2) / 2; lv <= logCpdMax; lv += 0.25) {
+    for (let lv = Math.floor(logCpdMin * 4) / 4; lv <= logCpdMax; lv += 0.125) {
         const x = toX(Math.pow(10, lv));
         if (x < ml || x > ml + pw) continue;
         ctx.beginPath(); ctx.moveTo(x, mt); ctx.lineTo(x, mt + ph); ctx.stroke();
     }
-    for (let dB = yMin; dB <= yMax; dB += 5) {
-        if (dB === 0) continue;
+    for (let dB = yMin; dB <= yMax; dB += 2.5) {
+        if (Math.abs(dB) < 0.1) continue;
         const y = toY(dB);
+        ctx.strokeStyle = (dB % 5 === 0) ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.03)';
         ctx.beginPath(); ctx.moveTo(ml, y); ctx.lineTo(ml + pw, y); ctx.stroke();
     }
 
     // --- Axes ---
-    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(ml, mt); ctx.lineTo(ml, mt + ph); ctx.lineTo(ml + pw, mt + ph);
     ctx.stroke();
 
     // --- Average line ---
-    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([8, 5]);
+    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+    ctx.lineWidth = 0.75;
+    ctx.setLineDash([6, 4]);
     ctx.beginPath();
     ctx.moveTo(ml, zeroY); ctx.lineTo(ml + pw, zeroY);
     ctx.stroke();
     ctx.setLineDash([]);
-
-    // "Average" label
-    ctx.fillStyle = 'rgba(255,255,255,0.35)';
-    ctx.font = `10px ${font}`;
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    ctx.font = `9px ${font}`;
     ctx.textAlign = 'left';
-    ctx.fillText('AVERAGE', ml + pw + 5, zeroY + 4);
+    ctx.fillText('AVERAGE', ml + pw + 5, zeroY + 3);
 
-    // --- Compute smooth spline through data ---
+    // --- Spline ---
     const dataPoints = normData.map(d => ({ x: toX(d.cpd), y: toY(d.dB) }));
-    const spline = catmullRomSpline(dataPoints, 20);
+    const spline = catmullRomSpline(dataPoints, 24);
 
-    // --- Gradient fill between spline and zero line ---
-    // Above (green)
+    // --- Gradient fill between spline and zero ---
     ctx.save();
-    ctx.beginPath();
-    ctx.rect(ml, mt, pw, zeroY - mt);
-    ctx.clip();
-    const greenFill = ctx.createLinearGradient(0, mt, 0, zeroY);
-    greenFill.addColorStop(0, 'rgba(52, 211, 153, 0.35)');
-    greenFill.addColorStop(1, 'rgba(52, 211, 153, 0.05)');
-    ctx.fillStyle = greenFill;
+    ctx.beginPath(); ctx.rect(ml, mt, pw, zeroY - mt); ctx.clip();
+    const gf = ctx.createLinearGradient(0, mt, 0, zeroY);
+    gf.addColorStop(0, 'rgba(52, 211, 153, 0.25)');
+    gf.addColorStop(1, 'rgba(52, 211, 153, 0.03)');
+    ctx.fillStyle = gf;
     ctx.beginPath();
     ctx.moveTo(spline[0].x, zeroY);
     spline.forEach(p => ctx.lineTo(p.x, p.y));
     ctx.lineTo(spline[spline.length - 1].x, zeroY);
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
+    ctx.closePath(); ctx.fill(); ctx.restore();
 
-    // Below (red)
     ctx.save();
-    ctx.beginPath();
-    ctx.rect(ml, zeroY, pw, mt + ph - zeroY);
-    ctx.clip();
-    const redFill = ctx.createLinearGradient(0, zeroY, 0, mt + ph);
-    redFill.addColorStop(0, 'rgba(248, 113, 113, 0.05)');
-    redFill.addColorStop(1, 'rgba(248, 113, 113, 0.35)');
-    ctx.fillStyle = redFill;
+    ctx.beginPath(); ctx.rect(ml, zeroY, pw, mt + ph - zeroY); ctx.clip();
+    const rf = ctx.createLinearGradient(0, zeroY, 0, mt + ph);
+    rf.addColorStop(0, 'rgba(248, 113, 113, 0.03)');
+    rf.addColorStop(1, 'rgba(248, 113, 113, 0.25)');
+    ctx.fillStyle = rf;
     ctx.beginPath();
     ctx.moveTo(spline[0].x, zeroY);
     spline.forEach(p => ctx.lineTo(p.x, p.y));
     ctx.lineTo(spline[spline.length - 1].x, zeroY);
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
+    ctx.closePath(); ctx.fill(); ctx.restore();
 
-    // --- Glow under the spline curve ---
+    // --- Subtle glow ---
     ctx.save();
-    ctx.shadowColor = 'rgba(59, 130, 246, 0.5)';
-    ctx.shadowBlur = 12;
-    ctx.strokeStyle = 'rgba(59, 130, 246, 0.3)';
-    ctx.lineWidth = 6;
+    ctx.shadowColor = 'rgba(59, 130, 246, 0.35)';
+    ctx.shadowBlur = 8;
+    ctx.strokeStyle = 'rgba(59, 130, 246, 0.15)';
+    ctx.lineWidth = 4;
     ctx.lineJoin = 'round';
     ctx.beginPath();
     spline.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
     ctx.stroke();
     ctx.restore();
 
-    // --- Main spline curve ---
+    // --- Main curve ---
     const lineGrad = ctx.createLinearGradient(spline[0].x, 0, spline[spline.length - 1].x, 0);
     lineGrad.addColorStop(0, '#60a5fa');
     lineGrad.addColorStop(0.5, '#a78bfa');
     lineGrad.addColorStop(1, '#818cf8');
     ctx.strokeStyle = lineGrad;
-    ctx.lineWidth = 2.5;
+    ctx.lineWidth = 2;
     ctx.lineJoin = 'round';
     ctx.beginPath();
     spline.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
     ctx.stroke();
 
-    // --- Data points with glow ---
+    // --- Data points (small, refined) ---
     normData.forEach(d => {
         const x = toX(d.cpd);
         const y = toY(d.dB);
         const color = d.dB >= 0 ? '#34d399' : '#f87171';
-        const glowColor = d.dB >= 0 ? 'rgba(52, 211, 153, 0.4)' : 'rgba(248, 113, 113, 0.4)';
-
-        // Glow
+        // Small dot matching curve weight
         ctx.beginPath();
-        ctx.arc(x, y, 10, 0, Math.PI * 2);
-        ctx.fillStyle = glowColor;
-        ctx.fill();
-
-        // Point
-        ctx.beginPath();
-        ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+        ctx.arc(x, y, 2.5, 0, Math.PI * 2);
         ctx.fillStyle = color;
         ctx.fill();
-        ctx.strokeStyle = 'rgba(255,255,255,0.8)';
-        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+        ctx.lineWidth = 0.75;
         ctx.stroke();
     });
 
-    // --- X-axis labels ---
-    ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.font = `10px ${font}`;
+    // --- X-axis: dual labels ---
+    // Technical: cpd values at each data point
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.font = `9px ${font}`;
     ctx.textAlign = 'center';
-    // Show labels at each data point's cpd
     normData.forEach(d => {
         const x = toX(d.cpd);
-        const cpdLabel = d.cpd < 1 ? d.cpd.toFixed(2) : d.cpd.toFixed(1);
-        ctx.fillText(cpdLabel, x, mt + ph + 16);
+        ctx.fillText(d.cpd < 1 ? d.cpd.toFixed(2) : d.cpd.toFixed(1), x, mt + ph + 13);
     });
-    ctx.fillStyle = 'rgba(255,255,255,0.35)';
-    ctx.font = `9px ${font}`;
-    ctx.fillText('Spatial Frequency (cpd)', ml + pw / 2, mt + ph + 42);
-
-    // --- Snellen equivalents below cpd ---
-    ctx.fillStyle = 'rgba(255,255,255,0.3)';
-    ctx.font = `8px ${font}`;
+    // Snellen equivalents
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    ctx.font = `7.5px ${font}`;
     normData.forEach(d => {
         const x = toX(d.cpd);
         const denomLabel = Number.isInteger(d.denom) ? d.denom : Math.round(d.denom);
-        ctx.fillText(`20/${denomLabel}`, x, mt + ph + 27);
+        ctx.fillText(`20/${denomLabel}`, x, mt + ph + 23);
     });
+    // Technical axis title
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.font = `8px ${font}`;
+    ctx.fillText('Spatial Frequency (cpd)', ml + pw / 2, mt + ph + 36);
+    // Layman axis: coarse ←→ fine
+    ctx.font = `bold 7.5px ${font}`;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+    ctx.fillText('COARSE', ml, mt + ph + 50);
+    ctx.textAlign = 'center';
+    ctx.fillText('Detail \u2192', ml + pw / 2, mt + ph + 50);
+    ctx.textAlign = 'right';
+    ctx.fillText('FINE', ml + pw, mt + ph + 50);
 
-    // --- Y-axis labels ---
-    ctx.font = `10px ${font}`;
+    // --- Y-axis: dual labels ---
+    ctx.font = `9px ${font}`;
     ctx.textAlign = 'right';
     for (let dB = yMin; dB <= yMax; dB += 5) {
         const y = toY(dB);
         const label = (dB > 0 ? '+' : '') + dB;
-        ctx.fillStyle = dB > 0 ? 'rgba(52, 211, 153, 0.6)'
-                      : dB < 0 ? 'rgba(248, 113, 113, 0.6)'
-                      : 'rgba(255,255,255,0.5)';
-        ctx.fillText(label + ' dB', ml - 6, y + 3);
+        ctx.fillStyle = dB > 0 ? 'rgba(52, 211, 153, 0.5)'
+                      : dB < 0 ? 'rgba(248, 113, 113, 0.5)'
+                      : 'rgba(255,255,255,0.4)';
+        ctx.fillText(label + ' dB', ml - 5, y + 3);
     }
+    // Technical axis title
     ctx.save();
     ctx.translate(11, mt + ph / 2);
     ctx.rotate(-Math.PI / 2);
     ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(255,255,255,0.35)';
-    ctx.font = `9px ${font}`;
-    ctx.fillText('vs. Average', 0, 0);
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    ctx.font = `8px ${font}`;
+    ctx.fillText('Contrast Sensitivity vs. Average', 0, 0);
+    ctx.restore();
+    // Layman axis: contrast description
+    ctx.save();
+    ctx.translate(ml + pw + 42, mt + ph / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = 'center';
+    ctx.font = `bold 7.5px ${font}`;
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillText('sees faint \u2190  Contrast  \u2192 needs bold', 0, 0);
     ctx.restore();
 
-    // --- Better / Worse labels ---
-    ctx.font = `bold 9px ${font}`;
+    // --- Better / Worse ---
+    ctx.font = `bold 8px ${font}`;
     ctx.textAlign = 'right';
-    ctx.fillStyle = 'rgba(52, 211, 153, 0.35)';
-    ctx.fillText('BETTER \u25B2', ml + pw - 4, mt + 14);
-    ctx.fillStyle = 'rgba(248, 113, 113, 0.35)';
-    ctx.fillText('WORSE \u25BC', ml + pw - 4, mt + ph - 6);
+    ctx.fillStyle = 'rgba(52, 211, 153, 0.3)';
+    ctx.fillText('BETTER \u25B2', ml + pw - 4, mt + 12);
+    ctx.fillStyle = 'rgba(248, 113, 113, 0.3)';
+    ctx.fillText('WORSE \u25BC', ml + pw - 4, mt + ph - 5);
 }
 
 function initLuminanceCalibration() {
