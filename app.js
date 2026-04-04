@@ -1848,20 +1848,24 @@ function getCapHeightRatio(fontFamily) {
     return 0.72;
 }
 
-function pickSnellenLetters() {
+function pickFromPool(pool, count) {
     const letters = [];
-    for (let i = 0; i < 5; i++) {
-        letters.push(SLOAN_LETTERS[Math.floor(Math.random() * SLOAN_LETTERS.length)]);
+    for (let i = 0; i < count; i++) {
+        let pick;
+        do {
+            pick = pool[Math.floor(Math.random() * pool.length)];
+        } while (i > 0 && pick === letters[i - 1]);
+        letters.push(pick);
     }
     return letters;
 }
 
+function pickSnellenLetters() {
+    return pickFromPool(SLOAN_LETTERS, 5);
+}
+
 function pickBaileyLovieLetters() {
-    const letters = [];
-    for (let i = 0; i < 5; i++) {
-        letters.push(BAILEY_LOVIE_LETTERS[Math.floor(Math.random() * BAILEY_LOVIE_LETTERS.length)]);
-    }
-    return letters;
+    return pickFromPool(BAILEY_LOVIE_LETTERS, 5);
 }
 
 function renderDistanceTest() {
@@ -1970,11 +1974,7 @@ function updateContrastSlider() {
 // ==========================================
 
 function csfPickLetters(count) {
-    const letters = [];
-    for (let i = 0; i < count; i++) {
-        letters.push(SLOAN_LETTERS[Math.floor(Math.random() * SLOAN_LETTERS.length)]);
-    }
-    return letters;
+    return pickFromPool(SLOAN_LETTERS, count);
 }
 
 function csfComputeContrasts(startContrast, endContrast, count) {
