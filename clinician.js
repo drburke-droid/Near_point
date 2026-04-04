@@ -600,7 +600,7 @@ function renderCSFGraph(canvas, results) {
     ctx.textAlign = 'center';
     ctx.font = `bold 7.5px ${font}`;
     ctx.fillStyle = 'rgba(255,255,255,0.15)';
-    ctx.fillText('sees faint \u2190  Contrast  \u2192 needs bold', 0, 0);
+    ctx.fillText('needs bold \u2190  Contrast  \u2192 sees faint', 0, 0);
     ctx.restore();
 
     // Better / Worse
