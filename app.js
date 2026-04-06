@@ -2275,7 +2275,7 @@ function csfBuildResults() {
     return allDenoms.map(denom => {
         const r = csfState.results[denom];
         const threshold = r.refinedThreshold || r.coarseThreshold || 100;
-        const cpd = 30 / denom;
+        const cpd = 600 / denom;
         const sensitivity = 100 / threshold;
         return { denom, cpd, threshold, sensitivity };
     });
@@ -2366,15 +2366,28 @@ function csfFinalize(finalResults) {
 // Debug: generate fake results and jump to graph
 // Usage: csfDebug() in console, or add ?debug to URL
 function csfDebug() {
-    const fakeResults = CSF_ALL_LEVELS.map(denom => {
-        const cpd = 30 / denom;
+    // Generate realistic fake CSF: monotonically decreasing past peak, no reversals
+    const fakeResults = [];
+    let prevCS = 0;
+    let pastPeak = false;
+    for (const denom of CSF_ALL_LEVELS) {
+        const cpd = 600 / denom;
         const norm = csfNormative(cpd);
-        // Simulate patient slightly above average with some noise
-        const jitter = 1 + (Math.random() - 0.4) * 0.5;
-        const sensitivity = norm * jitter;
+        // Mild jitter, biased slightly above average
+        const jitter = 1 + (Math.random() - 0.3) * 0.25;
+        let sensitivity = norm * jitter;
+        // Once past the peak, enforce monotonic decline
+        if (pastPeak) {
+            sensitivity = Math.min(prevCS * (0.35 + Math.random() * 0.15), sensitivity);
+        } else if (sensitivity < prevCS) {
+            pastPeak = true;
+        }
+        // Stop once we'd need 100% contrast or more
+        if (sensitivity < 1.0) break;
+        prevCS = sensitivity;
         const threshold = 100 / sensitivity;
-        return { denom, cpd, threshold, sensitivity };
-    });
+        fakeResults.push({ denom, cpd, threshold, sensitivity });
+    }
 
     // Make sure distance tab is active and channel exists
     setupDistanceChannel();
@@ -2490,6 +2503,26 @@ function csfShowPatientResults(results) {
             }
         };
     });
+
+    // Wire up lighting mode toggle
+    const modeBtn = $('#csf-lighting-toggle');
+    if (modeBtn) {
+        modeBtn.onclick = () => {
+            csfLightingMode = csfLightingMode === 'photopic' ? 'mesopic' : 'photopic';
+            modeBtn.textContent = csfLightingMode === 'photopic' ? '☀ Photopic' : '☾ Mesopic';
+            modeBtn.classList.toggle('mesopic-active', csfLightingMode === 'mesopic');
+            // Update button visibility based on lighting mode
+            $$('.csf-ref-btn').forEach(b => {
+                const scenario = CSF_SCENARIOS[b.dataset.ref];
+                if (!scenario) return;
+                const match = scenario.lighting === csfLightingMode || scenario.lighting === 'mixed';
+                b.classList.toggle('csf-ref-dimmed', !match);
+            });
+            if (canvas && lastCSFResultsForGraph) {
+                renderCSFGraph(canvas, lastCSFResultsForGraph);
+            }
+        };
+    }
 }
 
 function csfClosePatientResults() {
@@ -2497,15 +2530,39 @@ function csfClosePatientResults() {
     if (overlay) overlay.classList.add('hidden');
 }
 
-// Normative letter-optotype CSF: log-Gaussian in log-frequency space
-// Peaks near 20/50 (0.5 cpd), smooth decline through 20/20 to 20/10.
-// Average thresholds: 20/50 ~2.3%, 20/20 ~8%, 20/15 ~17%, 20/10 ~64%
+// Normative letter-optotype CSF: data-driven from published clinical norms.
+// Letter CSF is LOW-PASS: flat plateau for large letters, steep decline near
+// acuity limit. Peak CS ≈ 63 at 20/60 (Pelli-Robson anchor, logCS 1.80).
+// Cutoff (CS≈1) at ~20/15 for young adults.
+// Sources: Pelli & Bex 2013, Alexander et al 1997, Elliott et al 1995.
+const CSF_NORMATIVE_PTS = [
+    { cpd: 5,   cs: 50 },   // 20/120 — plateau
+    { cpd: 6,   cs: 55 },   // 20/100 — plateau
+    { cpd: 8.6, cs: 60 },   // 20/70  — plateau
+    { cpd: 10,  cs: 63 },   // 20/60  — Pelli-Robson anchor (logCS 1.80)
+    { cpd: 12,  cs: 58 },   // 20/50  — beginning of decline
+    { cpd: 15,  cs: 45 },   // 20/40  — decline
+    { cpd: 20,  cs: 22 },   // 20/30  — steep decline
+    { cpd: 24,  cs: 10 },   // 20/25  — approaching limit
+    { cpd: 30,  cs: 3.5 },  // 20/20  — near acuity limit
+    { cpd: 34,  cs: 1.5 },  // 20/18  — threshold
+    { cpd: 40,  cs: 0.5 },  // 20/15  — below visible range, terminates curve
+];
+
 function csfNormative(cpd) {
-    const peak = 45;
-    const fp = 0.5;
-    const sigma = 0.3;
-    const logRatio = Math.log10(cpd / fp);
-    return peak * Math.exp(-(logRatio * logRatio) / (2 * sigma * sigma));
+    const pts = CSF_NORMATIVE_PTS;
+    if (cpd <= pts[0].cpd) return pts[0].cs;
+    if (cpd >= pts[pts.length - 1].cpd) return pts[pts.length - 1].cs;
+    const lc = Math.log10(cpd);
+    for (let i = 0; i < pts.length - 1; i++) {
+        const lx0 = Math.log10(pts[i].cpd), lx1 = Math.log10(pts[i + 1].cpd);
+        if (lc >= lx0 && lc <= lx1) {
+            const t = (lc - lx0) / (lx1 - lx0);
+            const ly0 = Math.log10(pts[i].cs), ly1 = Math.log10(pts[i + 1].cs);
+            return Math.pow(10, ly0 + t * (ly1 - ly0));
+        }
+    }
+    return pts[pts.length - 1].cs;
 }
 
 // Catmull-Rom spline: returns array of {x, y} points for smooth curve through data
@@ -2537,21 +2594,110 @@ function catmullRomSpline(points, segments) {
     return result;
 }
 
-// Reference CSF models for overlay comparison
-const CSF_REFERENCES = {
-    normal: { label: 'Average', peak: 45, fp: 0.5, sigma: 0.3 },
-    elite:  { label: 'Elite Vision', peak: 120, fp: 0.6, sigma: 0.38, color: '#facc15', desc: 'Fighter pilot / pro athlete' },
-    cataract: { label: 'Cataract', peak: 12, fp: 0.35, sigma: 0.22, color: '#f87171', desc: 'Moderate nuclear cataract' },
-    mfiol: { label: 'Multifocal IOL', peak: 22, fp: 0.4, sigma: 0.24, color: '#fb923c', desc: 'Diffractive multifocal implant' },
-    mfcl:  { label: 'Multifocal CL', peak: 28, fp: 0.42, sigma: 0.26, color: '#c084fc', desc: 'Center-near multifocal contact' }
+// Data-driven CSF reference scenarios (letter-CSF domain).
+// All values proportional to the corrected normative (peak ~63 CS at 0.5 cpd).
+// Ratios derived from published grating-CSF differences mapped to letter domain.
+// Same low-pass shape: plateau at low freq, steep decline near acuity limit.
+const CSF_SCENARIOS = {
+    normal_mesopic: {
+        label: 'Normal Mesopic', category: 'normal', lighting: 'mesopic',
+        color: '#818cf8', confidence: 'high',
+        desc: 'Young adult, ND 1.5 (~3 cd/m²)',
+        // 0.3–0.5 log unit drop; cutoff moves to ~20/25
+        points: [{cpd:6,cs:33},{cpd:10,cs:37},{cpd:12,cs:30},{cpd:15,cs:19},{cpd:20,cs:6.6},{cpd:24,cs:2.0},{cpd:30,cs:0.8}]
+    },
+    older_adult: {
+        label: 'Older Adult', category: 'normal', lighting: 'photopic',
+        color: '#a78bfa', confidence: 'high',
+        desc: 'Photopic, age 60+',
+        // Pelli-Robson age norms: logCS ~1.65; Elliott et al 1995
+        points: [{cpd:6,cs:44},{cpd:10,cs:47},{cpd:12,cs:42},{cpd:15,cs:30},{cpd:20,cs:12},{cpd:24,cs:4.5},{cpd:30,cs:1.5}]
+    },
+    elite_aviator: {
+        label: 'Elite Aviator', category: 'elite', lighting: 'photopic',
+        color: '#facc15', confidence: 'moderate',
+        desc: 'Fighter pilot / military aviator',
+        // ~15–25% above normal; cutoff extends to ~20/12; Rabin & Wiley 1996
+        points: [{cpd:6,cs:61},{cpd:10,cs:72},{cpd:12,cs:68},{cpd:15,cs:55},{cpd:20,cs:29},{cpd:24,cs:14},{cpd:30,cs:5.6},{cpd:40,cs:2.0},{cpd:50,cs:1.0}]
+    },
+    elite_athlete: {
+        label: 'Elite Athlete', category: 'elite', lighting: 'photopic',
+        color: '#fbbf24', confidence: 'moderate',
+        desc: 'Professional / Olympic athlete',
+        // Laby et al 1996 MLB; ~10–15% above normal, cutoff ~20/12
+        points: [{cpd:6,cs:59},{cpd:10,cs:69},{cpd:12,cs:65},{cpd:15,cs:52},{cpd:20,cs:26},{cpd:24,cs:13},{cpd:30,cs:5.1},{cpd:40,cs:1.5}]
+    },
+    early_cataract: {
+        label: 'Early Cataract', category: 'disease', lighting: 'photopic',
+        color: '#f87171', confidence: 'high',
+        desc: 'Early nuclear or cortical cataract',
+        // Preserved low freq (~75%), steep high-freq loss; cutoff ~20/30
+        // Elliott & Situ 1998
+        points: [{cpd:6,cs:43},{cpd:10,cs:46},{cpd:12,cs:36},{cpd:15,cs:21},{cpd:20,cs:6},{cpd:24,cs:1.2}]
+    },
+    post_lasik: {
+        label: 'Post-LASIK', category: 'surgery', lighting: 'photopic',
+        color: '#34d399', confidence: 'high',
+        desc: 'Typical post-LASIK photopic',
+        // Mild reduction (~5–15%); Hiraoka et al 2009
+        points: [{cpd:6,cs:52},{cpd:10,cs:59},{cpd:12,cs:52},{cpd:15,cs:39},{cpd:20,cs:18},{cpd:24,cs:7.5},{cpd:30,cs:2.5},{cpd:40,cs:1.0}]
+    },
+    post_lasik_mesopic: {
+        label: 'Post-LASIK Mesopic', category: 'surgery', lighting: 'mesopic',
+        color: '#10b981', confidence: 'high',
+        desc: 'Typical post-LASIK under ND 1.5',
+        points: [{cpd:6,cs:30},{cpd:10,cs:32},{cpd:12,cs:25},{cpd:15,cs:15},{cpd:20,cs:4},{cpd:24,cs:1.0}]
+    },
+    edof_iol: {
+        label: 'EDOF IOL', category: 'surgery', lighting: 'mesopic',
+        color: '#38bdf8', confidence: 'moderate',
+        desc: 'Extended depth-of-focus IOL, mesopic',
+        // Less CS loss than multifocal; Mencucci et al 2018
+        points: [{cpd:6,cs:26},{cpd:10,cs:28},{cpd:12,cs:22},{cpd:15,cs:13},{cpd:20,cs:3.5},{cpd:24,cs:1.2}]
+    },
+    mfiol: {
+        label: 'Multifocal IOL', category: 'surgery', lighting: 'mesopic',
+        color: '#fb923c', confidence: 'moderate',
+        desc: 'Diffractive multifocal/trifocal IOL, mesopic',
+        // Greater CS reduction; de Vries et al 2013
+        points: [{cpd:6,cs:21},{cpd:10,cs:22},{cpd:12,cs:17},{cpd:15,cs:10},{cpd:20,cs:2},{cpd:24,cs:0.8}]
+    },
+    scleral_before: {
+        label: 'Scleral (Before)', category: 'optics', lighting: 'photopic',
+        color: '#f472b6', confidence: 'approximate',
+        desc: 'Keratoconus, before scleral lens fit',
+        // Significant loss; Marsack et al 2007
+        points: [{cpd:6,cs:19},{cpd:10,cs:19},{cpd:12,cs:15},{cpd:15,cs:8},{cpd:20,cs:2},{cpd:24,cs:0.9}]
+    },
+    scleral_after: {
+        label: 'Scleral (After)', category: 'optics', lighting: 'photopic',
+        color: '#e879f9', confidence: 'approximate',
+        desc: 'Keratoconus, with scleral lens',
+        // Substantial improvement; Sabesan et al 2013
+        points: [{cpd:6,cs:39},{cpd:10,cs:41},{cpd:12,cs:34},{cpd:15,cs:21},{cpd:20,cs:7},{cpd:24,cs:2.5},{cpd:30,cs:1.0}]
+    }
 };
 
-function csfRefCurve(ref, cpd) {
-    const lr = Math.log10(cpd / ref.fp);
-    return ref.peak * Math.exp(-(lr * lr) / (2 * ref.sigma * ref.sigma));
+// Interpolate a data-point-based reference curve at a given cpd (log-log linear interp)
+function csfRefInterp(scenario, cpd) {
+    const pts = scenario.points;
+    if (cpd <= pts[0].cpd) return pts[0].cs;
+    if (cpd >= pts[pts.length - 1].cpd) return pts[pts.length - 1].cs;
+    const logCpd = Math.log10(cpd);
+    for (let i = 0; i < pts.length - 1; i++) {
+        const lx0 = Math.log10(pts[i].cpd), lx1 = Math.log10(pts[i + 1].cpd);
+        if (logCpd >= lx0 && logCpd <= lx1) {
+            const t = (logCpd - lx0) / (lx1 - lx0);
+            const ly0 = Math.log10(Math.max(0.1, pts[i].cs));
+            const ly1 = Math.log10(Math.max(0.1, pts[i + 1].cs));
+            return Math.pow(10, ly0 + t * (ly1 - ly0));
+        }
+    }
+    return pts[pts.length - 1].cs;
 }
 
-let activeCSFRefs = new Set(); // which reference overlays are toggled on
+let activeCSFRefs = new Set();
+let csfLightingMode = 'photopic'; // 'photopic' or 'mesopic'
 
 function renderCSFGraph(canvas, results) {
     const dpr = window.devicePixelRatio || 1;
@@ -2571,15 +2717,15 @@ function renderCSFGraph(canvas, results) {
     const ph = h - mt - mb;
 
     // Axis ranges — raw CSF (log-log)
-    const logCpdMin = -0.6;  // ~0.25 cpd
-    const logCpdMax = 0.55;  // ~3.5 cpd
+    const logCpdMin = 0.65;  // ~4.5 cpd
+    const logCpdMax = 1.85;  // ~71 cpd
     const logCsMin = -0.1;   // ~0.8 CS
-    const logCsMax = 2.2;    // ~160 CS
+    const logCsMax = 2.0;    // ~100 CS
 
-    function toX(cpd) { return ml + pw * (Math.log10(Math.max(0.25, cpd)) - logCpdMin) / (logCpdMax - logCpdMin); }
+    function toX(cpd) { return ml + pw * (Math.log10(Math.max(4.5, cpd)) - logCpdMin) / (logCpdMax - logCpdMin); }
     function toY(cs) { return mt + ph * (1 - (Math.log10(Math.max(0.8, cs)) - logCsMin) / (logCsMax - logCsMin)); }
 
-    // Sample a model curve as canvas points
+    // Sample a model curve as canvas points (includes one point past CS floor for clean exit)
     function sampleCurve(fn, steps) {
         const pts = [];
         for (let i = 0; i <= steps; i++) {
@@ -2587,6 +2733,7 @@ function renderCSFGraph(canvas, results) {
             const cpd = Math.pow(10, logCpd);
             const cs = fn(cpd);
             pts.push({ x: toX(cpd), y: toY(cs) });
+            if (cs < 0.8) break; // one point past floor so curve exits cleanly
         }
         return pts;
     }
@@ -2594,7 +2741,7 @@ function renderCSFGraph(canvas, results) {
     // --- Fine grid ---
     ctx.lineWidth = 0.5;
     // Vertical
-    [0.3, 0.5, 0.7, 1.0, 1.5, 2.0, 3.0].forEach(cpd => {
+    [6, 8, 10, 12, 15, 20, 30, 40, 60].forEach(cpd => {
         const x = toX(cpd);
         ctx.strokeStyle = 'rgba(255,255,255,0.05)';
         ctx.beginPath(); ctx.moveTo(x, mt); ctx.lineTo(x, mt + ph); ctx.stroke();
@@ -2626,42 +2773,84 @@ function renderCSFGraph(canvas, results) {
     // Label
     const normLabelX = normPts[Math.round(normPts.length * 0.15)];
     if (normLabelX) {
-        ctx.fillStyle = 'rgba(255,255,255,0.25)';
-        ctx.font = `8px ${font}`;
+        ctx.fillStyle = 'rgba(255,255,255,0.35)';
+        ctx.font = `10px ${font}`;
         ctx.textAlign = 'left';
-        ctx.fillText('Average', normLabelX.x + 4, normLabelX.y - 6);
+        ctx.fillText('Average', normLabelX.x + 4, normLabelX.y - 7);
     }
 
-    // --- Reference overlays ---
+    // --- Reference overlays (data-driven) ---
     activeCSFRefs.forEach(refKey => {
-        const ref = CSF_REFERENCES[refKey];
-        if (!ref) return;
-        const refPts = sampleCurve(cpd => csfRefCurve(ref, cpd), 80);
-        ctx.strokeStyle = ref.color + '55';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([3, 3]);
+        const scenario = CSF_SCENARIOS[refKey];
+        if (!scenario) return;
+        const pts = scenario.points;
+        // Sample the interpolated curve only within the data range
+        const minCpd = pts[0].cpd, maxCpd = pts[pts.length - 1].cpd;
+        const refPts = [];
+        const steps = 60;
+        for (let i = 0; i <= steps; i++) {
+            const cpd = minCpd * Math.pow(maxCpd / minCpd, i / steps);
+            const cs = csfRefInterp(scenario, cpd);
+            refPts.push({ x: toX(cpd), y: toY(cs) });
+            if (cs < 0.8) break;
+        }
+        if (refPts.length < 2) return;
+
+        const isDashed = scenario.confidence === 'approximate';
+        ctx.strokeStyle = scenario.color + '77';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash(isDashed ? [4, 4] : [3, 3]);
         ctx.beginPath();
         refPts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
         ctx.stroke();
         ctx.setLineDash([]);
 
-        // Label
-        const lp = refPts[Math.round(refPts.length * 0.82)];
-        if (lp) {
-            ctx.fillStyle = ref.color + '88';
-            ctx.font = `7px ${font}`;
-            ctx.textAlign = 'right';
-            ctx.fillText(ref.label, lp.x - 4, lp.y - 5);
+        // Data point dots
+        pts.forEach(pt => {
+            if (pt.cs < 0.8) return;
+            const px = toX(pt.cpd), py = toY(pt.cs);
+            ctx.fillStyle = scenario.color + 'aa';
+            ctx.beginPath();
+            ctx.arc(px, py, 2, 0, Math.PI * 2);
+            ctx.fill();
+        });
+
+        // Label near the curve peak
+        const labelPt = refPts[Math.round(refPts.length * 0.18)];
+        if (labelPt) {
+            ctx.fillStyle = scenario.color + 'aa';
+            ctx.font = `9px ${font}`;
+            ctx.textAlign = 'left';
+            ctx.fillText(scenario.label, labelPt.x + 4, labelPt.y - 6);
         }
     });
 
     // --- Patient spline (raw CS) ---
-    const patientPts = results.map(r => ({ x: toX(r.cpd), y: toY(r.sensitivity) }));
-    // Extend line to y-axis: extrapolate from first two points
+    // Include all measured points; extrapolate to CS=1 (high-contrast acuity limit)
+    const sortedResults = [...results].sort((a, b) => a.cpd - b.cpd);
+    const patientPts = sortedResults.map(r => ({ x: toX(r.cpd), y: toY(r.sensitivity) }));
+
+    // Extrapolate right: extend to CS=1 (100% contrast = acuity limit)
+    if (sortedResults.length >= 2) {
+        const last = sortedResults[sortedResults.length - 1];
+        const prev = sortedResults[sortedResults.length - 2];
+        if (last.sensitivity > 1.0) {
+            // Log-log extrapolation to find cpd where CS = 1.0
+            const logCpd1 = Math.log10(prev.cpd), logCpd2 = Math.log10(last.cpd);
+            const logCs1 = Math.log10(prev.sensitivity), logCs2 = Math.log10(last.sensitivity);
+            const slope = (logCs2 - logCs1) / (logCpd2 - logCpd1);
+            if (slope < 0) { // only if curve is declining
+                const logCpdAtCs1 = logCpd2 + (0 - logCs2) / slope; // logCS=0 means CS=1
+                const cpdAtCs1 = Math.pow(10, logCpdAtCs1);
+                patientPts.push({ x: toX(cpdAtCs1), y: toY(1.0) });
+            }
+        }
+    }
+
+    // Extrapolate left: extend line to y-axis from first two points
     if (patientPts.length >= 2) {
         const dx = patientPts[1].x - patientPts[0].x;
         const dy = patientPts[1].y - patientPts[0].y;
-        const extX = ml;
         const extSteps = (patientPts[0].x - ml) / (dx || 1);
         const extY = patientPts[0].y - dy * extSteps;
         patientPts.unshift({ x: ml, y: Math.max(mt, Math.min(mt + ph, extY)) });
@@ -2682,36 +2871,37 @@ function renderCSFGraph(canvas, results) {
             : 'rgba(248, 113, 113, 0.18)';
 
         ctx.fillStyle = fillColor;
-        ctx.beginPath();
 
-        // Walk the spline, build fill polygon between patient and norm
-        let started = false;
+        // Walk the spline, collect segments where patient is above/below norm
+        let segment = []; // collect {x, patY, normY} for current segment
+        const flushSegment = () => {
+            if (segment.length < 2) { segment = []; return; }
+            ctx.beginPath();
+            // Trace patient curve forward
+            ctx.moveTo(segment[0].x, segment[0].normY);
+            segment.forEach(pt => ctx.lineTo(pt.x, pt.patY));
+            // Trace normative curve backward
+            for (let i = segment.length - 1; i >= 0; i--) {
+                ctx.lineTo(segment[i].x, segment[i].normY);
+            }
+            ctx.closePath();
+            ctx.fill();
+            segment = [];
+        };
+
         spline.forEach(p => {
-            // Find cpd at this x position
             const logCpd = logCpdMin + (p.x - ml) / pw * (logCpdMax - logCpdMin);
             const cpd = Math.pow(10, logCpd);
             const normY = toY(csfNormative(cpd));
 
             const above = p.y < normY; // canvas y is inverted
             if ((fillPass === 0 && above) || (fillPass === 1 && !above)) {
-                if (!started) { ctx.moveTo(p.x, normY); started = true; }
-                ctx.lineTo(p.x, p.y);
-            } else if (started) {
-                ctx.lineTo(p.x, normY);
-                ctx.closePath();
-                ctx.fill();
-                ctx.beginPath();
-                started = false;
+                segment.push({ x: p.x, patY: p.y, normY });
+            } else {
+                flushSegment();
             }
         });
-        if (started) {
-            // Close back to norm line
-            const lastP = spline[spline.length - 1];
-            const lastLogCpd = logCpdMin + (lastP.x - ml) / pw * (logCpdMax - logCpdMin);
-            ctx.lineTo(lastP.x, toY(csfNormative(Math.pow(10, lastLogCpd))));
-            ctx.closePath();
-            ctx.fill();
-        }
+        flushSegment();
         ctx.restore();
     }
 
@@ -2737,68 +2927,69 @@ function renderCSFGraph(canvas, results) {
     ctx.stroke();
 
     // --- X-axis labels ---
-    ctx.font = `9px ${font}`;
+    ctx.font = `11px ${font}`;
     ctx.textAlign = 'center';
-    const xTicks = [0.3, 0.5, 0.7, 1.0, 1.5, 2.0, 3.0];
+    const xTicks = [6, 10, 15, 20, 30, 40, 60];
     xTicks.forEach(cpd => {
         const x = toX(cpd);
-        ctx.fillStyle = 'rgba(255,255,255,0.4)';
-        ctx.fillText(cpd < 1 ? cpd.toFixed(1) : cpd.toFixed(1), x, mt + ph + 14);
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        ctx.fillText(cpd, x, mt + ph + 16);
     });
     // Snellen equivalents at data points
-    ctx.fillStyle = 'rgba(255,255,255,0.22)';
-    ctx.font = `7.5px ${font}`;
-    results.forEach(r => {
+    ctx.fillStyle = 'rgba(255,255,255,0.32)';
+    ctx.font = `9px ${font}`;
+    sortedResults.forEach(r => {
         const x = toX(r.cpd);
         const dl = Number.isInteger(r.denom) ? r.denom : Math.round(r.denom);
-        ctx.fillText(`20/${dl}`, x, mt + ph + 24);
+        ctx.fillText(`20/${dl}`, x, mt + ph + 28);
     });
     // Title + layman
-    ctx.fillStyle = 'rgba(255,255,255,0.25)';
-    ctx.font = `8px ${font}`;
-    ctx.fillText('Spatial Frequency (cpd)', ml + pw / 2, mt + ph + 37);
-    ctx.font = `bold 7px ${font}`;
-    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.font = `10px ${font}`;
+    ctx.fillText('Spatial Frequency (cpd)', ml + pw / 2, mt + ph + 42);
+    ctx.font = `bold 8.5px ${font}`;
+    ctx.fillStyle = 'rgba(255,255,255,0.2)';
     ctx.textAlign = 'left';
-    ctx.fillText('COARSE', ml, mt + ph + 49);
+    ctx.fillText('COARSE', ml, mt + ph + 54);
     ctx.textAlign = 'center';
-    ctx.fillText('Detail \u2192', ml + pw / 2, mt + ph + 49);
+    ctx.fillText('Detail \u2192', ml + pw / 2, mt + ph + 54);
     ctx.textAlign = 'right';
-    ctx.fillText('FINE', ml + pw, mt + ph + 49);
+    ctx.fillText('FINE', ml + pw, mt + ph + 54);
 
     // --- Y-axis labels ---
-    ctx.font = `9px ${font}`;
+    ctx.font = `11px ${font}`;
     ctx.textAlign = 'right';
     [1, 2, 5, 10, 20, 50, 100].forEach(cs => {
         const y = toY(cs);
         if (y < mt || y > mt + ph) return;
-        ctx.fillStyle = 'rgba(255,255,255,0.35)';
-        ctx.fillText(cs, ml - 6, y + 3);
+        ctx.fillStyle = 'rgba(255,255,255,0.45)';
+        ctx.fillText(cs, ml - 6, y + 4);
     });
-    // Title + layman
+    // Title
     ctx.save();
-    ctx.translate(12, mt + ph / 2);
+    ctx.translate(14, mt + ph / 2);
     ctx.rotate(-Math.PI / 2);
     ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(255,255,255,0.2)';
-    ctx.font = `8px ${font}`;
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.font = `10px ${font}`;
     ctx.fillText('Contrast Sensitivity', 0, 0);
     ctx.restore();
+    // Layman label — offset below the title
     ctx.save();
-    ctx.translate(ml - 42, mt + ph / 2);
+    ctx.translate(14, mt + ph / 2);
     ctx.rotate(-Math.PI / 2);
     ctx.textAlign = 'center';
-    ctx.font = `bold 7px ${font}`;
-    ctx.fillStyle = 'rgba(255,255,255,0.12)';
-    ctx.fillText('needs bold \u2190\u2192 sees faint', 0, 0);
+    ctx.font = `bold 8.5px ${font}`;
+    ctx.fillStyle = 'rgba(255,255,255,0.18)';
+    ctx.fillText('needs bold \u2190\u2192 sees faint', 0, 14);
     ctx.restore();
 
     // --- "You" label near patient curve peak ---
     const peakPt = patientPts.reduce((best, p) => p.y < best.y ? p : best, patientPts[0]);
     ctx.fillStyle = '#60a5fa';
-    ctx.font = `bold 9px ${font}`;
+    ctx.font = `bold 11px ${font}`;
     ctx.textAlign = 'center';
-    ctx.fillText('You', peakPt.x, peakPt.y - 10);
+    ctx.fillText('You', peakPt.x, peakPt.y - 12);
 }
 
 function initLuminanceCalibration() {

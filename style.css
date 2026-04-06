@@ -1862,6 +1862,63 @@ h3 {
     color: white;
 }
 
+.csf-ref-btn.csf-ref-dimmed {
+    opacity: 0.35;
+}
+
+.csf-ref-btn.csf-ref-dimmed:hover {
+    opacity: 0.6;
+}
+
+.csf-ref-btn.csf-ref-dimmed.active {
+    opacity: 0.7;
+}
+
+.csf-ref-group-label {
+    display: inline-block;
+    width: 100%;
+    font-size: 0.58rem;
+    font-weight: 700;
+    color: rgba(255,255,255,0.2);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-top: 4px;
+}
+
+.csf-ref-group-label:first-child {
+    margin-top: 0;
+}
+
+.csf-controls-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.csf-lighting-btn {
+    padding: 5px 16px;
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 100px;
+    background: rgba(255,200,50,0.08);
+    color: rgba(255,255,255,0.6);
+    font-family: inherit;
+    font-size: 0.72rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.csf-lighting-btn:hover {
+    background: rgba(255,200,50,0.15);
+    color: rgba(255,255,255,0.85);
+}
+
+.csf-lighting-btn.mesopic-active {
+    background: rgba(100,130,255,0.15);
+    border-color: rgba(100,130,255,0.3);
+    color: rgba(180,190,255,0.9);
+}
+
 .csf-results-content .luminance-modal-close {
     color: rgba(255, 255, 255, 0.5);
 }

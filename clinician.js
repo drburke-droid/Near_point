@@ -369,14 +369,35 @@ function showPass3Suggestion(results, noisyDenoms) {
 // CSF Graph Rendering (Normalized + Smoothed)
 // ==========================================
 
-// Normative letter-optotype CSF: log-Gaussian in log-frequency space
-// Peaks near 20/50, smooth decline through 20/20 to 20/10
+// Normative letter-optotype CSF: low-pass shape, peak ~63 CS at 20/60.
+// Pelli & Bex 2013, Alexander et al 1997, Elliott et al 1995.
+const CSF_NORMATIVE_PTS = [
+    { cpd: 5,   cs: 50 },
+    { cpd: 6,   cs: 55 },
+    { cpd: 8.6, cs: 60 },
+    { cpd: 10,  cs: 63 },
+    { cpd: 12,  cs: 58 },
+    { cpd: 15,  cs: 45 },
+    { cpd: 20,  cs: 22 },
+    { cpd: 24,  cs: 10 },
+    { cpd: 30,  cs: 3.5 },
+    { cpd: 34,  cs: 1.5 },
+    { cpd: 40,  cs: 0.5 },
+];
 function csfNormative(cpd) {
-    const peak = 45;
-    const fp = 0.5;
-    const sigma = 0.3;
-    const logRatio = Math.log10(cpd / fp);
-    return peak * Math.exp(-(logRatio * logRatio) / (2 * sigma * sigma));
+    const pts = CSF_NORMATIVE_PTS;
+    if (cpd <= pts[0].cpd) return pts[0].cs;
+    if (cpd >= pts[pts.length - 1].cpd) return pts[pts.length - 1].cs;
+    const lc = Math.log10(cpd);
+    for (let i = 0; i < pts.length - 1; i++) {
+        const lx0 = Math.log10(pts[i].cpd), lx1 = Math.log10(pts[i + 1].cpd);
+        if (lc >= lx0 && lc <= lx1) {
+            const t = (lc - lx0) / (lx1 - lx0);
+            const ly0 = Math.log10(pts[i].cs), ly1 = Math.log10(pts[i + 1].cs);
+            return Math.pow(10, ly0 + t * (ly1 - ly0));
+        }
+    }
+    return pts[pts.length - 1].cs;
 }
 
 function catmullRomSpline(points, segments) {
@@ -406,17 +427,46 @@ function catmullRomSpline(points, segments) {
     return result;
 }
 
-// Reference CSF models (same as patient display)
-const CSF_REFERENCES = {
-    normal: { label: 'Average', peak: 45, fp: 0.5, sigma: 0.3 },
-    elite:  { label: 'Elite Vision', peak: 120, fp: 0.6, sigma: 0.38, color: '#facc15' },
-    cataract: { label: 'Cataract', peak: 12, fp: 0.35, sigma: 0.22, color: '#f87171' },
-    mfiol: { label: 'Multifocal IOL', peak: 22, fp: 0.4, sigma: 0.24, color: '#fb923c' },
-    mfcl:  { label: 'Multifocal CL', peak: 28, fp: 0.42, sigma: 0.26, color: '#c084fc' }
+// Data-driven CSF reference scenarios (letter-CSF domain)
+const CSF_SCENARIOS = {
+    normal_mesopic: { label: 'Normal Mesopic', color: '#818cf8', lighting: 'mesopic', confidence: 'high',
+        points: [{cpd:6,cs:33},{cpd:10,cs:37},{cpd:12,cs:30},{cpd:15,cs:19},{cpd:20,cs:6.6},{cpd:24,cs:2.0},{cpd:30,cs:0.8}] },
+    older_adult: { label: 'Older Adult', color: '#a78bfa', lighting: 'photopic', confidence: 'high',
+        points: [{cpd:6,cs:44},{cpd:10,cs:47},{cpd:12,cs:42},{cpd:15,cs:30},{cpd:20,cs:12},{cpd:24,cs:4.5},{cpd:30,cs:1.5}] },
+    elite_aviator: { label: 'Elite Aviator', color: '#facc15', lighting: 'photopic', confidence: 'moderate',
+        points: [{cpd:6,cs:61},{cpd:10,cs:72},{cpd:12,cs:68},{cpd:15,cs:55},{cpd:20,cs:29},{cpd:24,cs:14},{cpd:30,cs:5.6},{cpd:40,cs:2.0},{cpd:50,cs:1.0}] },
+    elite_athlete: { label: 'Elite Athlete', color: '#fbbf24', lighting: 'photopic', confidence: 'moderate',
+        points: [{cpd:6,cs:59},{cpd:10,cs:69},{cpd:12,cs:65},{cpd:15,cs:52},{cpd:20,cs:26},{cpd:24,cs:13},{cpd:30,cs:5.1},{cpd:40,cs:1.5}] },
+    early_cataract: { label: 'Early Cataract', color: '#f87171', lighting: 'photopic', confidence: 'high',
+        points: [{cpd:6,cs:43},{cpd:10,cs:46},{cpd:12,cs:36},{cpd:15,cs:21},{cpd:20,cs:6},{cpd:24,cs:1.2}] },
+    post_lasik: { label: 'Post-LASIK', color: '#34d399', lighting: 'photopic', confidence: 'high',
+        points: [{cpd:6,cs:52},{cpd:10,cs:59},{cpd:12,cs:52},{cpd:15,cs:39},{cpd:20,cs:18},{cpd:24,cs:7.5},{cpd:30,cs:2.5},{cpd:40,cs:1.0}] },
+    post_lasik_mesopic: { label: 'Post-LASIK Mesopic', color: '#10b981', lighting: 'mesopic', confidence: 'high',
+        points: [{cpd:6,cs:30},{cpd:10,cs:32},{cpd:12,cs:25},{cpd:15,cs:15},{cpd:20,cs:4},{cpd:24,cs:1.0}] },
+    edof_iol: { label: 'EDOF IOL', color: '#38bdf8', lighting: 'mesopic', confidence: 'moderate',
+        points: [{cpd:6,cs:26},{cpd:10,cs:28},{cpd:12,cs:22},{cpd:15,cs:13},{cpd:20,cs:3.5},{cpd:24,cs:1.2}] },
+    mfiol: { label: 'Multifocal IOL', color: '#fb923c', lighting: 'mesopic', confidence: 'moderate',
+        points: [{cpd:6,cs:21},{cpd:10,cs:22},{cpd:12,cs:17},{cpd:15,cs:10},{cpd:20,cs:2},{cpd:24,cs:0.8}] },
+    scleral_before: { label: 'Scleral (Before)', color: '#f472b6', lighting: 'photopic', confidence: 'approximate',
+        points: [{cpd:6,cs:19},{cpd:10,cs:19},{cpd:12,cs:15},{cpd:15,cs:8},{cpd:20,cs:2},{cpd:24,cs:0.9}] },
+    scleral_after: { label: 'Scleral (After)', color: '#e879f9', lighting: 'photopic', confidence: 'approximate',
+        points: [{cpd:6,cs:39},{cpd:10,cs:41},{cpd:12,cs:34},{cpd:15,cs:21},{cpd:20,cs:7},{cpd:24,cs:2.5},{cpd:30,cs:1.0}] }
 };
-function csfRefCurve(ref, cpd) {
-    const lr = Math.log10(cpd / ref.fp);
-    return ref.peak * Math.exp(-(lr * lr) / (2 * ref.sigma * ref.sigma));
+function csfRefInterp(scenario, cpd) {
+    const pts = scenario.points;
+    if (cpd <= pts[0].cpd) return pts[0].cs;
+    if (cpd >= pts[pts.length - 1].cpd) return pts[pts.length - 1].cs;
+    const logCpd = Math.log10(cpd);
+    for (let i = 0; i < pts.length - 1; i++) {
+        const lx0 = Math.log10(pts[i].cpd), lx1 = Math.log10(pts[i + 1].cpd);
+        if (logCpd >= lx0 && logCpd <= lx1) {
+            const t = (logCpd - lx0) / (lx1 - lx0);
+            const ly0 = Math.log10(Math.max(0.1, pts[i].cs));
+            const ly1 = Math.log10(Math.max(0.1, pts[i + 1].cs));
+            return Math.pow(10, ly0 + t * (ly1 - ly0));
+        }
+    }
+    return pts[pts.length - 1].cs;
 }
 
 function renderCSFGraph(canvas, results) {
@@ -433,24 +483,27 @@ function renderCSFGraph(canvas, results) {
     const ml = 50, mr = 16, mt = 18, mb = 52;
     const pw = w - ml - mr, ph = h - mt - mb;
 
-    const logCpdMin = -0.6, logCpdMax = 0.55;
-    const logCsMin = -0.1, logCsMax = 2.2;
+    const logCpdMin = 0.65, logCpdMax = 1.85;
+    const logCsMin = -0.1, logCsMax = 2.0;
 
-    function toX(cpd) { return ml + pw * (Math.log10(Math.max(0.25, cpd)) - logCpdMin) / (logCpdMax - logCpdMin); }
+    function toX(cpd) { return ml + pw * (Math.log10(Math.max(4.5, cpd)) - logCpdMin) / (logCpdMax - logCpdMin); }
     function toY(cs) { return mt + ph * (1 - (Math.log10(Math.max(0.8, cs)) - logCsMin) / (logCsMax - logCsMin)); }
 
     function sampleCurve(fn, steps) {
         const pts = [];
         for (let i = 0; i <= steps; i++) {
             const lc = logCpdMin + (logCpdMax - logCpdMin) * i / steps;
-            pts.push({ x: toX(Math.pow(10, lc)), y: toY(fn(Math.pow(10, lc))) });
+            const cpd = Math.pow(10, lc);
+            const cs = fn(cpd);
+            pts.push({ x: toX(cpd), y: toY(cs) });
+            if (cs < 0.8) break;
         }
         return pts;
     }
 
     // Grid
     ctx.lineWidth = 0.5;
-    [0.3,0.5,0.7,1.0,1.5,2.0,3.0].forEach(cpd => {
+    [6,8,10,12,15,20,30,40,60].forEach(cpd => {
         ctx.strokeStyle = 'rgba(255,255,255,0.05)';
         const x = toX(cpd);
         ctx.beginPath(); ctx.moveTo(x, mt); ctx.lineTo(x, mt+ph); ctx.stroke();
@@ -478,8 +531,24 @@ function renderCSFGraph(canvas, results) {
     const nl = normPts[Math.round(normPts.length*0.15)];
     if (nl) { ctx.fillStyle='rgba(255,255,255,0.25)'; ctx.font=`8px ${font}`; ctx.textAlign='left'; ctx.fillText('Average', nl.x+4, nl.y-6); }
 
-    // Patient spline (extend to y-axis)
-    const patientPts = results.map(r => ({ x: toX(r.cpd), y: toY(r.sensitivity) }));
+    // Patient spline — extrapolate to CS=1 (acuity limit)
+    const sortedResults = [...results].sort((a, b) => a.cpd - b.cpd);
+    const patientPts = sortedResults.map(r => ({ x: toX(r.cpd), y: toY(r.sensitivity) }));
+    // Extrapolate right: extend to CS=1
+    if (sortedResults.length >= 2) {
+        const last = sortedResults[sortedResults.length - 1];
+        const prev = sortedResults[sortedResults.length - 2];
+        if (last.sensitivity > 1.0) {
+            const logCpd1 = Math.log10(prev.cpd), logCpd2 = Math.log10(last.cpd);
+            const logCs1 = Math.log10(prev.sensitivity), logCs2 = Math.log10(last.sensitivity);
+            const slope = (logCs2 - logCs1) / (logCpd2 - logCpd1);
+            if (slope < 0) {
+                const cpdAtCs1 = Math.pow(10, logCpd2 + (0 - logCs2) / slope);
+                patientPts.push({ x: toX(cpdAtCs1), y: toY(1.0) });
+            }
+        }
+    }
+    // Extrapolate left: extend to y-axis
     if (patientPts.length >= 2) {
         const dx = patientPts[1].x - patientPts[0].x;
         const dy = patientPts[1].y - patientPts[0].y;
@@ -492,18 +561,23 @@ function renderCSFGraph(canvas, results) {
     for (let fp = 0; fp < 2; fp++) {
         ctx.save(); ctx.beginPath(); ctx.rect(ml,mt,pw,ph); ctx.clip();
         ctx.fillStyle = fp===0 ? 'rgba(52,211,153,0.18)' : 'rgba(248,113,113,0.18)';
-        ctx.beginPath();
-        let started = false;
+        let seg = [];
+        const flush = () => {
+            if (seg.length < 2) { seg = []; return; }
+            ctx.beginPath();
+            ctx.moveTo(seg[0].x, seg[0].ny);
+            seg.forEach(pt => ctx.lineTo(pt.x, pt.py));
+            for (let i = seg.length - 1; i >= 0; i--) ctx.lineTo(seg[i].x, seg[i].ny);
+            ctx.closePath(); ctx.fill(); seg = [];
+        };
         spline.forEach(p => {
             const lc = logCpdMin + (p.x-ml)/pw*(logCpdMax-logCpdMin);
             const ny = toY(csfNormative(Math.pow(10,lc)));
             const above = p.y < ny;
-            if ((fp===0&&above)||(fp===1&&!above)) {
-                if (!started) { ctx.moveTo(p.x, ny); started=true; }
-                ctx.lineTo(p.x, p.y);
-            } else if (started) { ctx.lineTo(p.x, ny); ctx.closePath(); ctx.fill(); ctx.beginPath(); started=false; }
+            if ((fp===0&&above)||(fp===1&&!above)) { seg.push({x:p.x, py:p.y, ny}); }
+            else { flush(); }
         });
-        if (started) { const lp=spline[spline.length-1]; ctx.lineTo(lp.x, toY(csfNormative(Math.pow(10, logCpdMin+(lp.x-ml)/pw*(logCpdMax-logCpdMin))))); ctx.closePath(); ctx.fill(); }
+        flush();
         ctx.restore();
     }
 
@@ -520,25 +594,27 @@ function renderCSFGraph(canvas, results) {
     ctx.fillText('You', peak.x, peak.y-10);
 
     // X labels
-    ctx.font=`9px ${font}`; ctx.textAlign='center';
-    [0.3,0.5,0.7,1.0,1.5,2.0,3.0].forEach(cpd => {
-        ctx.fillStyle='rgba(255,255,255,0.4)';
-        ctx.fillText(cpd.toFixed(1), toX(cpd), mt+ph+14);
+    ctx.font=`11px ${font}`; ctx.textAlign='center';
+    [6,8,10,12,15,20,30,40,60].forEach(cpd => {
+        ctx.fillStyle='rgba(255,255,255,0.5)';
+        ctx.fillText(cpd, toX(cpd), mt+ph+16);
     });
-    ctx.fillStyle='rgba(255,255,255,0.22)'; ctx.font=`7.5px ${font}`;
-    results.forEach(r => { ctx.fillText(`20/${Number.isInteger(r.denom)?r.denom:Math.round(r.denom)}`, toX(r.cpd), mt+ph+24); });
-    ctx.fillStyle='rgba(255,255,255,0.25)'; ctx.font=`8px ${font}`;
-    ctx.fillText('Spatial Frequency (cpd)', ml+pw/2, mt+ph+37);
-    ctx.font=`bold 7px ${font}`; ctx.fillStyle='rgba(255,255,255,0.15)';
-    ctx.textAlign='left'; ctx.fillText('COARSE', ml, mt+ph+49);
-    ctx.textAlign='center'; ctx.fillText('Detail \u2192', ml+pw/2, mt+ph+49);
-    ctx.textAlign='right'; ctx.fillText('FINE', ml+pw, mt+ph+49);
+    ctx.fillStyle='rgba(255,255,255,0.32)'; ctx.font=`9px ${font}`;
+    sortedResults.forEach(r => { ctx.fillText(`20/${Number.isInteger(r.denom)?r.denom:Math.round(r.denom)}`, toX(r.cpd), mt+ph+28); });
+    ctx.fillStyle='rgba(255,255,255,0.35)'; ctx.font=`10px ${font}`;
+    ctx.fillText('Spatial Frequency (cpd)', ml+pw/2, mt+ph+42);
+    ctx.font=`bold 8.5px ${font}`; ctx.fillStyle='rgba(255,255,255,0.2)';
+    ctx.textAlign='left'; ctx.fillText('COARSE', ml, mt+ph+54);
+    ctx.textAlign='center'; ctx.fillText('Detail \u2192', ml+pw/2, mt+ph+54);
+    ctx.textAlign='right'; ctx.fillText('FINE', ml+pw, mt+ph+54);
 
     // Y labels
-    ctx.font=`9px ${font}`; ctx.textAlign='right';
-    [1,2,5,10,20,50,100].forEach(cs => { const y=toY(cs); if(y<mt||y>mt+ph)return; ctx.fillStyle='rgba(255,255,255,0.35)'; ctx.fillText(cs, ml-6, y+3); });
-    ctx.save(); ctx.translate(12, mt+ph/2); ctx.rotate(-Math.PI/2); ctx.textAlign='center';
-    ctx.fillStyle='rgba(255,255,255,0.2)'; ctx.font=`8px ${font}`; ctx.fillText('Contrast Sensitivity', 0, 0); ctx.restore();
+    ctx.font=`11px ${font}`; ctx.textAlign='right';
+    [1,2,5,10,20,50,100].forEach(cs => { const y=toY(cs); if(y<mt||y>mt+ph)return; ctx.fillStyle='rgba(255,255,255,0.45)'; ctx.fillText(cs, ml-6, y+4); });
+    ctx.save(); ctx.translate(14, mt+ph/2); ctx.rotate(-Math.PI/2); ctx.textAlign='center';
+    ctx.fillStyle='rgba(255,255,255,0.3)'; ctx.font=`10px ${font}`; ctx.fillText('Contrast Sensitivity', 0, 0); ctx.restore();
+    ctx.save(); ctx.translate(14, mt+ph/2); ctx.rotate(-Math.PI/2); ctx.textAlign='center';
+    ctx.font=`bold 8.5px ${font}`; ctx.fillStyle='rgba(255,255,255,0.18)'; ctx.fillText('needs bold \u2190\u2192 sees faint', 0, 14); ctx.restore();
 }
 
 // ==========================================
