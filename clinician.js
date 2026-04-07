@@ -18,67 +18,126 @@ let activePatient = null;        // { id, name, email }
 
 const PatientDB = {
     db: null,
+    _openPromise: null,
+
+    // Idempotent open — safe to call multiple times, returns cached promise
     open() {
-        return new Promise((resolve, reject) => {
-            const req = indexedDB.open('nearpoint-db', 1);
+        if (this._openPromise) return this._openPromise;
+        this._openPromise = new Promise((resolve, reject) => {
+            const req = indexedDB.open('nearpoint-db', 2); // v2: ensure indexes exist
             req.onupgradeneeded = (e) => {
                 const db = e.target.result;
                 if (!db.objectStoreNames.contains('patients')) {
                     const ps = db.createObjectStore('patients', { keyPath: 'id', autoIncrement: true });
                     ps.createIndex('name', 'name', { unique: false });
                 }
+                let rs;
                 if (!db.objectStoreNames.contains('csfResults')) {
-                    const rs = db.createObjectStore('csfResults', { keyPath: 'id', autoIncrement: true });
+                    rs = db.createObjectStore('csfResults', { keyPath: 'id', autoIncrement: true });
+                } else {
+                    rs = e.target.transaction.objectStore('csfResults');
+                }
+                // Ensure indexes exist (may have been missing in v1)
+                if (!rs.indexNames.contains('patientId')) {
                     rs.createIndex('patientId', 'patientId', { unique: false });
+                }
+                if (!rs.indexNames.contains('date')) {
                     rs.createIndex('date', 'date', { unique: false });
                 }
             };
-            req.onsuccess = (e) => { this.db = e.target.result; resolve(); };
-            req.onerror = (e) => reject(e.target.error);
+            req.onsuccess = (e) => {
+                this.db = e.target.result;
+                // Handle version change from another tab
+                this.db.onversionchange = () => {
+                    this.db.close();
+                    this.db = null;
+                    this._openPromise = null;
+                };
+                resolve();
+            };
+            req.onerror = (e) => {
+                console.error('PatientDB open failed:', e.target.error);
+                this._openPromise = null; // allow retry
+                reject(e.target.error);
+            };
         });
+        return this._openPromise;
     },
-    _store(name, mode) { return this.db.transaction(name, mode).objectStore(name); },
-    addPatient(name, email) {
+
+    // All methods await open() so the DB is guaranteed ready
+    async _store(name, mode) {
+        await this.open();
+        return this.db.transaction(name, mode).objectStore(name);
+    },
+
+    async addPatient(name, email) {
+        const store = await this._store('patients', 'readwrite');
         return new Promise((resolve, reject) => {
-            const req = this._store('patients', 'readwrite').add({ name, email, createdAt: Date.now() });
+            const req = store.add({ name, email, createdAt: Date.now() });
             req.onsuccess = () => resolve(req.result);
             req.onerror = (e) => reject(e.target.error);
         });
     },
-    getPatients() {
+
+    async getPatients() {
+        const store = await this._store('patients', 'readonly');
         return new Promise((resolve, reject) => {
-            const req = this._store('patients', 'readonly').getAll();
+            const req = store.getAll();
             req.onsuccess = () => resolve(req.result);
             req.onerror = (e) => reject(e.target.error);
         });
     },
-    getPatient(id) {
+
+    async getPatient(id) {
+        const store = await this._store('patients', 'readonly');
         return new Promise((resolve, reject) => {
-            const req = this._store('patients', 'readonly').get(id);
+            const req = store.get(id);
             req.onsuccess = () => resolve(req.result);
             req.onerror = (e) => reject(e.target.error);
         });
     },
-    saveCSFResult(patientId, results, graphDataURL) {
+
+    async saveCSFResult(patientId, results, graphDataURL) {
+        const store = await this._store('csfResults', 'readwrite');
         return new Promise((resolve, reject) => {
-            const req = this._store('csfResults', 'readwrite').add({
+            const req = store.add({
                 patientId, date: Date.now(), results, graphDataURL
             });
             req.onsuccess = () => resolve(req.result);
             req.onerror = (e) => reject(e.target.error);
         });
     },
-    getPatientResults(patientId) {
+
+    async getPatientResults(patientId) {
+        const store = await this._store('csfResults', 'readonly');
         return new Promise((resolve, reject) => {
-            const idx = this._store('csfResults', 'readonly').index('patientId');
-            const req = idx.getAll(patientId);
+            // Try index query first, fall back to full scan if index is missing
+            let req;
+            try {
+                const idx = store.index('patientId');
+                req = idx.getAll(patientId);
+            } catch (e) {
+                // Index missing — fall back to scanning all records
+                console.warn('patientId index missing, scanning all records');
+                req = store.getAll();
+                req.onsuccess = () => {
+                    const filtered = req.result
+                        .filter(r => r.patientId == patientId) // loose equality handles type mismatch
+                        .sort((a, b) => b.date - a.date);
+                    resolve(filtered);
+                };
+                req.onerror = (e2) => reject(e2.target.error);
+                return;
+            }
             req.onsuccess = () => resolve(req.result.sort((a, b) => b.date - a.date));
             req.onerror = (e) => reject(e.target.error);
         });
     },
-    deleteResult(resultId) {
+
+    async deleteResult(resultId) {
+        const store = await this._store('csfResults', 'readwrite');
         return new Promise((resolve, reject) => {
-            const req = this._store('csfResults', 'readwrite').delete(resultId);
+            const req = store.delete(resultId);
             req.onsuccess = () => resolve();
             req.onerror = (e) => reject(e.target.error);
         });
@@ -311,11 +370,20 @@ function showResults(results) {
     results.forEach(r => {
         const tr = document.createElement('tr');
         const denomLabel = Number.isInteger(r.denom) ? r.denom : Math.round(r.denom);
+        const threshStr = r.threshold >= 100 ? "Can\u2019t see"
+                        : r.threshold < 10 ? r.threshold.toFixed(1) + '%'
+                        : Math.round(r.threshold) + '%';
+        const norm = csfNormative(r.cpd);
+        const dB = 10 * Math.log10(Math.max(0.01, r.sensitivity) / norm);
+        let avgStr, avgClass;
+        if (r.threshold >= 100) { avgStr = '\u2014'; avgClass = ''; }
+        else if (dB >= 2) { avgStr = 'Above avg'; avgClass = 'result-above'; }
+        else if (dB >= -2) { avgStr = 'Average'; avgClass = 'result-avg'; }
+        else { avgStr = 'Below avg'; avgClass = 'result-below'; }
         tr.innerHTML = `
             <td>20/${denomLabel}</td>
-            <td>${r.cpd.toFixed(2)}</td>
-            <td>${r.threshold < 10 ? r.threshold.toFixed(1) : Math.round(r.threshold)}%</td>
-            <td>${r.sensitivity.toFixed(1)}</td>
+            <td>${threshStr}</td>
+            <td class="${avgClass}">${avgStr}</td>
         `;
         tbody.appendChild(tr);
     });
@@ -479,8 +547,11 @@ function renderCSFGraph(canvas, results) {
     ctx.scale(dpr, dpr);
     const font = 'Inter, -apple-system, sans-serif';
     ctx.clearRect(0, 0, w, h);
+    // Solid background so clipboard capture is self-contained (not transparent)
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(0, 0, w, h);
 
-    const ml = 50, mr = 16, mt = 18, mb = 52;
+    const ml = 58, mr = 16, mt = 18, mb = 64;
     const pw = w - ml - mr, ph = h - mt - mb;
 
     const logCpdMin = 0.65, logCpdMax = 1.85;
@@ -534,6 +605,18 @@ function renderCSFGraph(canvas, results) {
     // Patient spline — extrapolate to CS=1 (acuity limit)
     const sortedResults = [...results].sort((a, b) => a.cpd - b.cpd);
     const patientPts = sortedResults.map(r => ({ x: toX(r.cpd), y: toY(r.sensitivity) }));
+    // Find crossover (CS = 1)
+    let crossoverCpd = null;
+    for (let i = 0; i < sortedResults.length - 1; i++) {
+        const r1 = sortedResults[i], r2 = sortedResults[i + 1];
+        if (r1.sensitivity >= 1.0 && r2.sensitivity < 1.0) {
+            const lc1 = Math.log10(r1.cpd), lc2 = Math.log10(r2.cpd);
+            const ls1 = Math.log10(r1.sensitivity), ls2 = Math.log10(r2.sensitivity);
+            const t = (0 - ls1) / (ls2 - ls1);
+            crossoverCpd = Math.pow(10, lc1 + t * (lc2 - lc1));
+            break;
+        }
+    }
     // Extrapolate right: extend to CS=1
     if (sortedResults.length >= 2) {
         const last = sortedResults[sortedResults.length - 1];
@@ -545,6 +628,7 @@ function renderCSFGraph(canvas, results) {
             if (slope < 0) {
                 const cpdAtCs1 = Math.pow(10, logCpd2 + (0 - logCs2) / slope);
                 patientPts.push({ x: toX(cpdAtCs1), y: toY(1.0) });
+                if (!crossoverCpd) crossoverCpd = cpdAtCs1;
             }
         }
     }
@@ -593,28 +677,46 @@ function renderCSFGraph(canvas, results) {
     ctx.fillStyle='#60a5fa'; ctx.font=`bold 9px ${font}`; ctx.textAlign='center';
     ctx.fillText('You', peak.x, peak.y-10);
 
-    // X labels
-    ctx.font=`11px ${font}`; ctx.textAlign='center';
-    [6,8,10,12,15,20,30,40,60].forEach(cpd => {
+    // X labels — standard Snellen at fixed positions
+    const snellenTicks = [
+        {denom:100,cpd:6},{denom:50,cpd:12},{denom:40,cpd:15},{denom:30,cpd:20},
+        {denom:25,cpd:24},{denom:20,cpd:30},{denom:15,cpd:40},{denom:10,cpd:60}
+    ];
+    ctx.textAlign='center';
+    ctx.font=`bold 9px ${font}`;
+    snellenTicks.forEach(t => {
         ctx.fillStyle='rgba(255,255,255,0.5)';
-        ctx.fillText(cpd, toX(cpd), mt+ph+16);
+        ctx.fillText(`20/${t.denom}`, toX(t.cpd), mt+ph+15);
     });
-    ctx.fillStyle='rgba(255,255,255,0.32)'; ctx.font=`9px ${font}`;
-    sortedResults.forEach(r => { ctx.fillText(`20/${Number.isInteger(r.denom)?r.denom:Math.round(r.denom)}`, toX(r.cpd), mt+ph+28); });
-    ctx.fillStyle='rgba(255,255,255,0.35)'; ctx.font=`10px ${font}`;
-    ctx.fillText('Spatial Frequency (cpd)', ml+pw/2, mt+ph+42);
-    ctx.font=`bold 8.5px ${font}`; ctx.fillStyle='rgba(255,255,255,0.2)';
-    ctx.textAlign='left'; ctx.fillText('COARSE', ml, mt+ph+54);
-    ctx.textAlign='center'; ctx.fillText('Detail \u2192', ml+pw/2, mt+ph+54);
-    ctx.textAlign='right'; ctx.fillText('FINE', ml+pw, mt+ph+54);
+    ctx.font=`8px ${font}`; ctx.fillStyle='rgba(255,255,255,0.25)';
+    snellenTicks.forEach(t => ctx.fillText(`${t.cpd} cpd`, toX(t.cpd), mt+ph+26));
+
+    // Crossover marker
+    if (crossoverCpd) {
+        const denomLabel = Math.round(600/crossoverCpd);
+        const cx = toX(crossoverCpd), cy = toY(1.0);
+        ctx.strokeStyle='rgba(96,165,250,0.35)'; ctx.lineWidth=1; ctx.setLineDash([3,3]);
+        ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(cx,mt+ph); ctx.stroke(); ctx.setLineDash([]);
+        ctx.fillStyle='#60a5fa'; ctx.beginPath(); ctx.arc(cx,cy,3,0,Math.PI*2); ctx.fill();
+        ctx.font=`bold 11px ${font}`; ctx.fillStyle='#60a5fa'; ctx.textAlign='center';
+        ctx.fillText(`20/${denomLabel}`, cx, mt+ph+40);
+        ctx.font=`7px ${font}`; ctx.fillStyle='rgba(96,165,250,0.7)';
+        ctx.fillText('acuity limit', cx, mt+ph+49);
+    }
+
+    ctx.fillStyle='rgba(255,255,255,0.3)'; ctx.font=`9px ${font}`; ctx.textAlign='center';
+    ctx.fillText('Spatial Frequency (cpd)', ml+pw/2, mt+ph+60);
 
     // Y labels
-    ctx.font=`11px ${font}`; ctx.textAlign='right';
+    ctx.font=`10px ${font}`; ctx.textAlign='right';
     [1,2,5,10,20,50,100].forEach(cs => { const y=toY(cs); if(y<mt||y>mt+ph)return; ctx.fillStyle='rgba(255,255,255,0.45)'; ctx.fillText(cs, ml-6, y+4); });
     ctx.save(); ctx.translate(14, mt+ph/2); ctx.rotate(-Math.PI/2); ctx.textAlign='center';
     ctx.fillStyle='rgba(255,255,255,0.3)'; ctx.font=`10px ${font}`; ctx.fillText('Contrast Sensitivity', 0, 0); ctx.restore();
-    ctx.save(); ctx.translate(14, mt+ph/2); ctx.rotate(-Math.PI/2); ctx.textAlign='center';
-    ctx.font=`bold 8.5px ${font}`; ctx.fillStyle='rgba(255,255,255,0.18)'; ctx.fillText('needs bold \u2190\u2192 sees faint', 0, 14); ctx.restore();
+    // Layman labels — separated at top and bottom
+    ctx.save(); ctx.translate(10, mt+ph-20); ctx.rotate(-Math.PI/2); ctx.textAlign='left';
+    ctx.font=`bold 9px ${font}`; ctx.fillStyle='rgba(255,255,255,0.35)'; ctx.fillText('\u2190 Needs bolder', 0, 0); ctx.restore();
+    ctx.save(); ctx.translate(10, mt+20); ctx.rotate(-Math.PI/2); ctx.textAlign='right';
+    ctx.font=`bold 9px ${font}`; ctx.fillStyle='rgba(255,255,255,0.35)'; ctx.fillText('Can see faint \u2192', 0, 0); ctx.restore();
 }
 
 // ==========================================
@@ -713,7 +815,15 @@ async function refreshHistory() {
     container.innerHTML = '';
 
     if (!activePatientId) return;
-    const results = await PatientDB.getPatientResults(activePatientId);
+
+    let results;
+    try {
+        results = await PatientDB.getPatientResults(activePatientId);
+    } catch (err) {
+        console.error('Failed to load history:', err);
+        container.innerHTML = `<div style="color:#f87171; font-size:0.8rem; padding:8px 0">Database error: ${err.message || err}</div>`;
+        return;
+    }
 
     if (results.length === 0) {
         container.innerHTML = '<div style="color:rgba(255,255,255,0.3); font-size:0.8rem; padding:8px 0">No test history</div>';
@@ -785,59 +895,127 @@ async function saveCurrentResults() {
     let graphDataURL = '';
     try { graphDataURL = canvas.toDataURL('image/png'); } catch (e) { /* ok */ }
 
-    await PatientDB.saveCSFResult(activePatientId, lastCompletedResults, graphDataURL);
-    showToast(`Saved to ${activePatient.name}`);
-    $('#btn-save-results').disabled = true;
-    refreshHistory();
+    try {
+        await PatientDB.saveCSFResult(activePatientId, lastCompletedResults, graphDataURL);
+        showToast(`Saved to ${activePatient.name}`);
+        $('#btn-save-results').disabled = true;
+        refreshHistory();
+    } catch (err) {
+        console.error('Save failed:', err);
+        showToast(`Save failed: ${err.message || err}`);
+    }
 }
 
 function copyResultsToClipboard(results, patient, date) {
     if (!results) { showToast('No results to copy'); return; }
 
-    const patientName = patient ? patient.name : 'Unknown';
+    const patientName = patient ? patient.name : 'Patient';
     const patientEmail = patient ? (patient.email || '') : '';
     const dateStr = (date || new Date()).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
 
-    // Build text version
-    let text = `CSF Test Results \u2014 ${patientName}\n`;
-    text += `Date: ${dateStr}\n`;
-    if (patientEmail) text += `Email: ${patientEmail}\n`;
-    text += `\nSnellen  | cpd   | Threshold | Sensitivity | vs. Avg\n`;
-    text += `---------|-------|-----------|-------------|--------\n`;
+    // Find acuity limit (where contrast sensitivity crosses 1.0)
+    const sorted = [...results].sort((a, b) => a.cpd - b.cpd);
+    let acuityLimit = null;
+    for (let i = 0; i < sorted.length - 1; i++) {
+        if (sorted[i].sensitivity >= 1.0 && sorted[i + 1].sensitivity < 1.0) {
+            const lc1 = Math.log10(sorted[i].cpd), lc2 = Math.log10(sorted[i + 1].cpd);
+            const ls1 = Math.log10(sorted[i].sensitivity), ls2 = Math.log10(sorted[i + 1].sensitivity);
+            const t = (0 - ls1) / (ls2 - ls1);
+            acuityLimit = `20/${Math.round(600 / Math.pow(10, lc1 + t * (lc2 - lc1)))}`;
+            break;
+        }
+    }
+    if (!acuityLimit && sorted.length > 0) {
+        const last = sorted[sorted.length - 1];
+        const prev = sorted.length >= 2 ? sorted[sorted.length - 2] : null;
+        if (last.sensitivity >= 1.0 && prev) {
+            const logCpd1 = Math.log10(prev.cpd), logCpd2 = Math.log10(last.cpd);
+            const logCs1 = Math.log10(prev.sensitivity), logCs2 = Math.log10(last.sensitivity);
+            const slope = (logCs2 - logCs1) / (logCpd2 - logCpd1);
+            if (slope < 0) {
+                const cpdAt1 = Math.pow(10, logCpd2 + (0 - logCs2) / slope);
+                acuityLimit = `20/${Math.round(600 / cpdAt1)}`;
+            } else {
+                acuityLimit = `better than 20/${Math.round(last.denom)}`;
+            }
+        }
+    }
 
+    // Layman comparison label from dB
+    function vsAvgLabel(dB) {
+        if (dB >= 5) return 'Well above average';
+        if (dB >= 2) return 'Above average';
+        if (dB >= -2) return 'Average';
+        if (dB >= -5) return 'Below average';
+        return 'Well below average';
+    }
+    function vsAvgEmoji(dB) {
+        if (dB >= 2) return '\u2705'; // ✅
+        if (dB >= -2) return '\u2796'; // ➖
+        return '\u26A0\uFE0F'; // ⚠️
+    }
+
+    // Build plain-text version
+    let text = `Your Contrast Sensitivity Results\n`;
+    text += `${patientName} \u2014 ${dateStr}\n`;
+    if (acuityLimit) text += `\nSmallest readable letter size: ${acuityLimit}\n`;
+    text += `\nLetter Size | Contrast Needed | vs. Average\n`;
+    text += `------------|-----------------|--------------------\n`;
     results.forEach(r => {
         const denomLabel = Number.isInteger(r.denom) ? r.denom : Math.round(r.denom);
         const norm = csfNormative(r.cpd);
         const dB = 10 * Math.log10(Math.max(0.01, r.sensitivity) / norm);
-        const dBStr = (dB >= 0 ? '+' : '') + dB.toFixed(1) + ' dB';
-        const threshStr = r.threshold < 10 ? r.threshold.toFixed(1) + '%' : Math.round(r.threshold) + '%';
-        text += `20/${String(denomLabel).padEnd(5)} | ${r.cpd.toFixed(2).padEnd(5)} | ${threshStr.padEnd(9)} | ${r.sensitivity.toFixed(1).padEnd(11)} | ${dBStr}\n`;
+        const threshStr = r.threshold >= 100 ? "Can't see"
+                        : r.threshold < 10 ? r.threshold.toFixed(1) + '%'
+                        : Math.round(r.threshold) + '%';
+        const avgStr = r.threshold >= 100 ? '\u2014' : vsAvgLabel(dB);
+        text += `20/${String(denomLabel).padEnd(7)} | ${threshStr.padEnd(15)} | ${avgStr}\n`;
     });
+    text += `\nContrast Needed = the minimum boldness your eyes need to see letters at that size. Lower is better.\n`;
 
-    // Build HTML version with embedded graph
+    // Build HTML version — graph first, then table
     const canvas = $('#csf-graph');
-    let imgTag = '';
+    let imgBlock = '';
     try {
         const dataURL = canvas.toDataURL('image/png');
-        imgTag = `<br><img src="${dataURL}" alt="CSF Graph" style="max-width:600px;border-radius:8px;">`;
-    } catch (e) { /* ok */ }
+        imgBlock = `<img src="${dataURL}" alt="Contrast Sensitivity Graph" style="max-width:600px;border-radius:8px;display:block;margin:12px 0">
+<p style="font-size:11px;color:#888;margin:2px 0 16px;font-style:italic">Your results (solid blue line) vs. population average (dashed line). Left side = big letters, right side = small letters. Higher on the graph = better contrast vision.</p>`;
+    } catch (e) { /* canvas capture failed, skip image */ }
 
+    const acuitySummary = acuityLimit
+        ? `<p style="font-size:15px;font-family:sans-serif;margin:8px 0 4px"><strong>Smallest readable letter size: ${acuityLimit}</strong></p>`
+        : '';
+
+    const tdStyle = 'padding:6px 14px;border:1px solid #ddd';
     const htmlRows = results.map(r => {
         const denomLabel = Number.isInteger(r.denom) ? r.denom : Math.round(r.denom);
         const norm = csfNormative(r.cpd);
         const dB = 10 * Math.log10(Math.max(0.01, r.sensitivity) / norm);
-        const dBStr = (dB >= 0 ? '+' : '') + dB.toFixed(1) + ' dB';
-        const threshStr = r.threshold < 10 ? r.threshold.toFixed(1) + '%' : Math.round(r.threshold) + '%';
-        return `<tr><td>20/${denomLabel}</td><td>${r.cpd.toFixed(2)}</td><td>${threshStr}</td><td>${r.sensitivity.toFixed(1)}</td><td>${dBStr}</td></tr>`;
+        const threshStr = r.threshold >= 100 ? "Can\u2019t see"
+                        : r.threshold < 10 ? r.threshold.toFixed(1) + '%'
+                        : Math.round(r.threshold) + '%';
+        const avgStr = r.threshold >= 100 ? '\u2014' : vsAvgLabel(dB);
+        const avgColor = dB >= 2 ? '#16a34a' : dB >= -2 ? '#555' : '#dc2626';
+        return `<tr>
+<td style="${tdStyle}">20/${denomLabel}</td>
+<td style="${tdStyle}">${threshStr}</td>
+<td style="${tdStyle};color:${avgColor}">${r.threshold >= 100 ? '\u2014' : vsAvgEmoji(dB)} ${avgStr}</td>
+</tr>`;
     }).join('');
 
-    const html = `<h3>CSF Test Results \u2014 ${patientName}</h3>
-<p>Date: ${dateStr}${patientEmail ? '<br>Email: ' + patientEmail : ''}</p>
-<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:sans-serif;font-size:13px">
-<tr style="background:#f0f0f0"><th>Snellen</th><th>cpd</th><th>Threshold</th><th>Sensitivity</th><th>vs. Avg</th></tr>
+    const html = `<h3 style="font-family:sans-serif;margin-bottom:4px">Your Contrast Sensitivity \u2014 ${patientName}</h3>
+<p style="font-family:sans-serif;color:#666;margin:2px 0 8px">${dateStr}${patientEmail ? ' &middot; ' + patientEmail : ''}</p>
+${acuitySummary}
+${imgBlock}
+<table style="border-collapse:collapse;font-family:sans-serif;font-size:13px;border:1px solid #ddd;margin:8px 0">
+<tr style="background:#f5f5f5">
+<th style="${tdStyle};text-align:left">Letter Size</th>
+<th style="${tdStyle};text-align:left">Contrast Needed</th>
+<th style="${tdStyle};text-align:left">vs. Average</th>
+</tr>
 ${htmlRows}
 </table>
-${imgTag}`;
+<p style="font-size:11px;color:#999;margin-top:4px;font-style:italic">Contrast Needed = the minimum boldness your eyes need to read letters at that size. Lower % = better.</p>`;
 
     // Write both text and HTML to clipboard
     try {
@@ -847,7 +1025,6 @@ ${imgTag}`;
             new ClipboardItem({ 'text/html': blob, 'text/plain': textBlob })
         ]).then(() => showToast('Copied to clipboard'));
     } catch (e) {
-        // Fallback: text only
         navigator.clipboard.writeText(text).then(() => showToast('Copied (text only)'));
     }
 }

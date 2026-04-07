@@ -587,6 +587,8 @@ let contrastPercent = 100; // Weber contrast percentage
 const CSF_ALL_LEVELS = [100, 70, 50, 40, 30, 25, 20, 15, 10]; // full range, tested top-down
 const CSF_LETTERS_PASS1 = 8;   // single letter per contrast (coarse survey)
 const CSF_LETTERS_PASS2 = 10;  // 2 letters at each of 5 contrast levels (paired validation)
+const CSF_LETTERS_RETEST = 6;  // 3 paired contrasts (lighter validation for retests)
+const CSF_LETTERS_NEW    = 8;  // 4 paired contrasts (moderate validation for new levels)
 const CSF_MIN_CONTRAST = 1.25; // Display floor %
 
 const csfState = {
@@ -596,10 +598,12 @@ const csfState = {
     levels: [],         // current pass's level list (denoms, may include non-standard like 20/18)
     currentLetters: [],
     currentContrasts: [],
-    results: {},        // keyed by snellenDenom: { coarseThreshold, refinedThreshold }
+    results: {},        // keyed by snellenDenom: { coarseThreshold, refinedThreshold, allWrong, errors, contrasts }
     channel: null,
     clinicianWindow: null,
-    waitingForClinician: false
+    waitingForClinician: false,
+    consecutiveFloors: 0, // track consecutive all-wrong levels in pass 1
+    newLevels: null       // Set of denoms not tested in pass 1 (new interpolation points)
 };
 
 // --- Font Metrics Cache ---
@@ -686,6 +690,11 @@ function setupDistanceCalScreen() {
         sizeReadout.textContent = Math.round(px) + ' px';
     }
 
+    // Restore saved mirror setting
+    const mirrorToggle = $('#dist-cal-mirror');
+    const savedMirror = localStorage.getItem('nearpoint_mirror');
+    if (savedMirror === 'true') mirrorToggle.checked = true;
+
     // Credit card size slider
     sizeSlider.addEventListener('input', () => {
         const px = parseFloat(sizeSlider.value);
@@ -710,6 +719,11 @@ function setupDistanceCalScreen() {
         const pxPerMm = parseFloat(sizeSlider.value) / 85.6;
         localStorage.setItem('nearpoint_dist_px_per_mm', pxPerMm);
         localStorage.setItem('nearpoint_gamma_grey', gammaSlider.value);
+
+        // Save and apply mirror setting to test screen
+        const mirrored = $('#dist-cal-mirror').checked;
+        localStorage.setItem('nearpoint_mirror', mirrored);
+        $('#mirror-checkbox').checked = mirrored;
 
         // Apply to state
         state.cssPixelsPerMm = pxPerMm;
@@ -1899,27 +1913,28 @@ function renderDistanceTest() {
 
     let letterHeightMM, indicatorText, currentLetters;
     let perLetterContrasts = null; // null = uniform, array = CSF mode
+    let effectiveDenom; // track Snellen denominator for spacing
 
     if (csfState.active) {
         // CSF mode: use current level's Snellen denominator
-        const snellenDenom = csfState.levels[csfState.levelIndex] || csfState.levels[csfState.levels.length - 1];
-        const arcminTotal = 5 * snellenDenom / 20;
+        effectiveDenom = csfState.levels[csfState.levelIndex] || csfState.levels[csfState.levels.length - 1];
+        const arcminTotal = 5 * effectiveDenom / 20;
         const radians = arcminTotal * Math.PI / (180 * 60);
         letterHeightMM = distMM * Math.tan(radians);
-        indicatorText = `CSF Pass ${csfState.pass} — 20/${snellenDenom}`;
+        indicatorText = `CSF Pass ${csfState.pass} — 20/${effectiveDenom}`;
         currentLetters = csfState.currentLetters;
         perLetterContrasts = csfState.currentContrasts;
     } else if (baileyLovieMode) {
         // Bailey-Lovie: LogMAR progression
         const logmar = LOGMAR_LEVELS[blLogmarIndex];
-        const snellenDenom = 20 * Math.pow(10, logmar);
+        effectiveDenom = 20 * Math.pow(10, logmar);
 
         // Letter height: subtends 5 * (denom/20) arcminutes at testing distance
-        const arcminTotal = 5 * snellenDenom / 20;
+        const arcminTotal = 5 * effectiveDenom / 20;
         const radians = arcminTotal * Math.PI / (180 * 60);
         letterHeightMM = distMM * Math.tan(radians);
 
-        indicatorText = `LogMAR ${logmar.toFixed(1)} (≈20/${Math.round(snellenDenom)})`;
+        indicatorText = `LogMAR ${logmar.toFixed(1)} (≈20/${Math.round(effectiveDenom)})`;
 
         if (blLetters.length === 0) {
             blLetters = pickBaileyLovieLetters();
@@ -1927,12 +1942,12 @@ function renderDistanceTest() {
         currentLetters = blLetters;
     } else {
         // Standard Snellen
-        const snellenDenom = SNELLEN_LEVELS[distanceSnellenIndex];
-        const arcminTotal = 5 * snellenDenom / 20;
+        effectiveDenom = SNELLEN_LEVELS[distanceSnellenIndex];
+        const arcminTotal = 5 * effectiveDenom / 20;
         const radians = arcminTotal * Math.PI / (180 * 60);
         letterHeightMM = distMM * Math.tan(radians);
 
-        indicatorText = `20/${snellenDenom}`;
+        indicatorText = `20/${effectiveDenom}`;
 
         if (distanceLetters.length === 0) {
             distanceLetters = pickSnellenLetters();
@@ -1961,6 +1976,15 @@ function renderDistanceTest() {
     container.style.fontSize = cssFontSize + 'px';
     container.style.fontFamily = optFont;
     container.style.transform = mirror ? 'scaleX(-1)' : 'none';
+
+    // Widen letter spacing at finer acuities (20/30 and smaller)
+    // so small letters don't crowd together
+    const denom = Math.round(effectiveDenom);
+    container.style.gap = denom <= 15 ? '0.8em'
+                        : denom <= 20 ? '0.65em'
+                        : denom <= 25 ? '0.5em'
+                        : denom <= 30 ? '0.4em'
+                        :               '0.3em';
     if (!perLetterContrasts) {
         container.style.color = letterColor;
     }
@@ -2013,26 +2037,33 @@ function csfAdaptiveStart(levelIndex) {
     if (csfState.pass >= 2) {
         const expected = csfInterpolateThreshold(denom);
         if (expected != null) {
-            return Math.min(100, expected * 1.8);
+            // Near the acuity limit: always start at 100% so the patient
+            // definitely sees the first pair — prevents false "can't see" from
+            // a single misidentified letter at marginal contrast
+            if (expected > 25) return 100;
+            // Otherwise 3× expected so the first letters are clearly visible
+            return Math.min(100, expected * 3.0);
         }
     }
     if (levelIndex === 0) return 100;
     // Pass 1: use previous level's threshold to adapt starting contrast
+    // Floor at 40% so the sweep always spans a wide range — prevents
+    // premature "all wrong" when sensitivity drops sharply between levels
     const prevDenom = csfState.levels[levelIndex - 1];
     const prevResult = csfState.results[prevDenom];
     if (prevResult && prevResult.coarseThreshold != null) {
-        return Math.min(100, prevResult.coarseThreshold * 2.0);
+        return Math.min(100, Math.max(40, prevResult.coarseThreshold * 2.5));
     }
     return 100;
 }
 
 function csfAdaptiveEnd(levelIndex) {
     const denom = csfState.levels[levelIndex];
-    if (csfState.pass === 2) {
-        // Pass 2: narrow range around interpolated threshold
+    if (csfState.pass >= 2) {
+        // Pass 2: wider range (0.15×) so contrasts extend well past threshold
         const expected = csfInterpolateThreshold(denom);
         if (expected != null) {
-            return Math.max(CSF_MIN_CONTRAST, expected * 0.3);
+            return Math.max(CSF_MIN_CONTRAST, expected * 0.15);
         }
     }
     // Pass 1: sweep all the way to the display floor
@@ -2066,33 +2097,104 @@ function csfInterpolateThreshold(denom) {
     return null;
 }
 
-// Generate pass 2 levels: insert intermediate sizes where CSF changes fastest
+// Evaluate how trustworthy a Pass 1 measurement is (0 = uncertain, 1 = solid)
+function csfCoarseConfidence(denom) {
+    const r = csfState.results[denom];
+    if (!r || r.coarseThreshold == null) return 0;
+    if (r.allWrong) return 0.2; // can't see at all — uncertain about exact cutoff
+
+    const errors = r.errors;
+    if (!errors) return 0.5;
+
+    // All correct = threshold below our test range, uncertain
+    if (errors.every(e => !e)) return 0.3;
+
+    // Check for non-monotonic pattern (correct-wrong-correct = lucky guess likely)
+    let lastCorrect = -1;
+    let gapFound = false;
+    for (let i = 0; i < errors.length; i++) {
+        if (!errors[i]) {
+            if (lastCorrect >= 0 && i > lastCorrect + 1) gapFound = true;
+            lastCorrect = i;
+        }
+    }
+    if (gapFound) return 0.4; // non-monotonic, needs retest
+
+    return 0.9; // clean monotonic transition — trust it
+}
+
+// Generate pass 2 levels: confidence-based — only test where genuinely needed
 function csfGenerateRefinedLevels() {
-    // Include all tested levels (coarse + any extensions)
-    const allTested = Object.keys(csfState.results)
+    const tested = Object.keys(csfState.results)
         .map(Number)
         .filter(d => csfState.results[d].coarseThreshold != null)
-        .sort((a, b) => b - a); // descending
-    if (allTested.length < 2) return [...allTested];
+        .sort((a, b) => b - a); // large → small
 
-    const levels = [];
-    for (let i = 0; i < allTested.length; i++) {
-        levels.push(allTested[i]);
-        if (i < allTested.length - 1) {
-            const d1 = allTested[i];
-            const d2 = allTested[i + 1];
-            const t1 = csfState.results[d1].coarseThreshold;
-            const t2 = csfState.results[d2].coarseThreshold;
-            const deltaLog = Math.abs(Math.log10(t1) - Math.log10(t2));
-            if (deltaLog > 0.2) {
-                const midDenom = Math.round(Math.sqrt(d1 * d2));
-                if (midDenom !== d1 && midDenom !== d2) {
-                    levels.push(midDenom);
-                }
+    if (tested.length < 2) return [...tested];
+
+    const levels = new Set();
+    const newLevels = new Set(); // track which are brand-new (not retests)
+
+    // ── 1. Only retest low-confidence coarse levels ──
+    tested.forEach(d => {
+        if (csfCoarseConfidence(d) < 0.7) levels.add(d);
+    });
+
+    // ── 2. Find the peak and always include it ──
+    let peakDenom = tested[0], peakThreshold = Infinity;
+    for (const d of tested) {
+        const t = csfState.results[d].coarseThreshold;
+        if (t < peakThreshold) { peakThreshold = t; peakDenom = d; }
+    }
+    levels.add(peakDenom);
+
+    // ── 3. Add new levels only where the curve changes fastest ──
+    //    (big threshold jumps = uncertain intermediate shape)
+    for (let i = 0; i < tested.length - 1; i++) {
+        const t1 = csfState.results[tested[i]].coarseThreshold;
+        const t2 = csfState.results[tested[i + 1]].coarseThreshold;
+        const slopeLog = Math.abs(Math.log10(Math.max(1, t1)) - Math.log10(Math.max(1, t2)));
+        if (slopeLog > 0.25) { // significant jump — add midpoint
+            const mid = Math.round(Math.sqrt(tested[i] * tested[i + 1]));
+            if (mid !== tested[i] && mid !== tested[i + 1]) {
+                levels.add(mid);
+                newLevels.add(mid);
             }
         }
     }
-    return levels.sort((a, b) => b - a);
+
+    // ── 4. Cutoff zone: one midpoint between last-good and first-floor ──
+    const goodDenoms = tested.filter(d => !csfState.results[d].allWrong);
+    const floorDenoms = tested.filter(d => csfState.results[d].allWrong);
+    if (goodDenoms.length > 0 && floorDenoms.length > 0) {
+        const lastGood = goodDenoms.sort((a, b) => a - b)[0];
+        const firstFloor = floorDenoms.sort((a, b) => b - a)[0];
+        if (lastGood > firstFloor) {
+            const mid = Math.round(Math.sqrt(lastGood * firstFloor));
+            if (mid !== lastGood && mid !== firstFloor) {
+                levels.add(mid);
+                newLevels.add(mid);
+            }
+        }
+    }
+
+    // ── 5. Extend one level past coarse range if no floor hit ──
+    if (csfState.consecutiveFloors < 2) {
+        const smallest = tested[tested.length - 1];
+        const next = CSF_ALL_LEVELS.filter(d => d < smallest).sort((a, b) => b - a)[0];
+        if (next) { levels.add(next); newLevels.add(next); }
+    }
+
+    // ── 6. Ensure minimum of 3 levels for a meaningful pass ──
+    if (levels.size < 3) {
+        // Add the two levels adjacent to the peak
+        const peakIdx = tested.indexOf(peakDenom);
+        if (peakIdx > 0) levels.add(tested[peakIdx - 1]);
+        if (peakIdx < tested.length - 1) levels.add(tested[peakIdx + 1]);
+    }
+
+    csfState.newLevels = newLevels;
+    return [...levels].sort((a, b) => b - a);
 }
 
 
@@ -2104,17 +2206,17 @@ function csfEstimateThreshold(contrasts, errors) {
         if (!errors[i]) lastCorrectIdx = i;
     }
     if (lastCorrectIdx === -1) {
-        // All wrong — threshold is above our starting contrast
-        return contrasts[0] * 1.5;
+        // All wrong — patient can't see at this size even at max contrast
+        return 100;
     }
     if (lastCorrectIdx === errors.length - 1) {
         // All correct — threshold is below our lowest contrast
-        return contrasts[contrasts.length - 1] * 0.7;
+        return Math.max(CSF_MIN_CONTRAST, contrasts[contrasts.length - 1] * 0.7);
     }
-    // Interpolate between last correct and first wrong after it
+    // Geometric mean between last correct and next wrong (correct for log-spaced contrasts)
     const correctContrast = contrasts[lastCorrectIdx];
     const wrongContrast = contrasts[lastCorrectIdx + 1];
-    return (correctContrast + wrongContrast) / 2;
+    return Math.sqrt(correctContrast * wrongContrast);
 }
 
 function csfBroadcast(type, payload) {
@@ -2131,6 +2233,8 @@ function csfStartTest() {
     csfState.levels = [...CSF_ALL_LEVELS]; // pass 1 walks the full range
     csfState.results = {};
     csfState.waitingForClinician = false;
+    csfState.consecutiveFloors = 0;
+    csfState.newLevels = null;
 
     // Open BroadcastChannel
     // Reuse the persistent distance channel
@@ -2167,26 +2271,60 @@ function csfComputePairedContrasts(startContrast, endContrast, numLevels) {
     return paired;
 }
 
-// Estimate threshold from paired pass 2 data: require both letters correct at a contrast
+// Estimate threshold from paired pass 2 data.
+// Scoring per pair: 2/2 = confirmed, 1/2 = partial (at threshold), 0/2 = missed.
+// Follows Snellen convention: ≥50% correct = patient CAN see at that contrast.
+// A partial pair (1/2) immediately after confirmed pairs gets credit — the patient
+// demonstrated detection, just not reliably. Isolated 1/2 after a miss is likely guessing.
 function csfEstimateThresholdPaired(contrasts, errors) {
-    // Group into pairs (indices 0-1, 2-3, 4-5, ...)
-    let lastConfirmedIdx = -1;
+    // Score each pair
+    const pairs = [];
     for (let i = 0; i < contrasts.length - 1; i += 2) {
-        const bothCorrect = !errors[i] && !errors[i + 1];
-        if (bothCorrect) {
-            lastConfirmedIdx = i + 1; // last index of this pair
-        }
+        const correct = (!errors[i] ? 1 : 0) + (!errors[i + 1] ? 1 : 0);
+        pairs.push({ contrast: contrasts[i], correct });
     }
-    if (lastConfirmedIdx === -1) {
-        return contrasts[0] * 1.5;
+
+    if (pairs.length === 0 || pairs.every(p => p.correct === 0)) return 100;
+    if (pairs[pairs.length - 1].correct >= 1) {
+        return Math.max(CSF_MIN_CONTRAST, pairs[pairs.length - 1].contrast * 0.7);
     }
-    if (lastConfirmedIdx >= contrasts.length - 1) {
-        return contrasts[contrasts.length - 1] * 0.7;
+
+    // Find last CONFIRMED pair (2/2 correct)
+    let lastConfIdx = -1;
+    for (let i = 0; i < pairs.length; i++) {
+        if (pairs[i].correct === 2) lastConfIdx = i;
     }
-    // Threshold between last confirmed pair and next pair
-    const confirmedContrast = contrasts[lastConfirmedIdx];
-    const nextContrast = contrasts[lastConfirmedIdx + 1];
-    return (confirmedContrast + nextContrast) / 2;
+
+    // Check for partial (1/2) immediately after the last confirmed pair.
+    // Only credit partials that are adjacent to confirmed — isolated 1/2 after
+    // a 0/2 gap is likely a lucky guess (18% chance with Sloan letters).
+    let partialIdx = -1;
+    const nextIdx = lastConfIdx + 1;
+    if (nextIdx >= 0 && nextIdx < pairs.length && pairs[nextIdx].correct === 1) {
+        partialIdx = nextIdx;
+    }
+    // Special case: no confirmed pairs at all, but first pair is 1/2
+    if (lastConfIdx === -1 && pairs[0].correct === 1) {
+        partialIdx = 0;
+    }
+
+    if (lastConfIdx === -1 && partialIdx === -1) return 100;
+
+    if (partialIdx >= 0) {
+        // Patient got 1/2 at this contrast — they're right at threshold.
+        // Threshold is at this contrast, weighted slightly toward the next
+        // pair (they weren't fully reliable). Uses pc^0.75 × nc^0.25.
+        const pc = pairs[partialIdx].contrast;
+        const ni = partialIdx + 1;
+        const nc = ni < pairs.length ? pairs[ni].contrast : pc * 0.5;
+        return Math.pow(pc, 0.75) * Math.pow(nc, 0.25);
+    }
+
+    // No partial — clean boundary between last confirmed and next pair
+    const cc = pairs[lastConfIdx].contrast;
+    const ni = lastConfIdx + 1;
+    const nc = ni < pairs.length ? pairs[ni].contrast : cc * 0.5;
+    return Math.sqrt(cc * nc);
 }
 
 function csfNextLine() {
@@ -2199,10 +2337,20 @@ function csfNextLine() {
         csfState.currentLetters = csfPickLetters(CSF_LETTERS_PASS1);
         csfState.currentContrasts = csfComputeContrasts(startContrast, endContrast, CSF_LETTERS_PASS1);
     } else {
-        // Pass 2+: paired letters for statistical validation
-        const numLevels = CSF_LETTERS_PASS2 / 2; // 5 contrast levels
-        csfState.currentContrasts = csfComputePairedContrasts(startContrast, endContrast, numLevels);
-        csfState.currentLetters = csfPickLetters(CSF_LETTERS_PASS2);
+        // Pass 2+: paired letters — MORE pairs near the acuity limit where
+        // guessing is most likely, fewer where sensitivity is clearly established
+        const expected = csfInterpolateThreshold(denom);
+        let numLetters;
+        if (expected != null && expected > 40) {
+            numLetters = 10; // 5 pairs — at the limit, need max confidence
+        } else if (expected != null && expected > 15) {
+            numLetters = CSF_LETTERS_NEW; // 4 pairs — transition zone
+        } else {
+            numLetters = CSF_LETTERS_RETEST; // 3 pairs — clearly visible range
+        }
+        const numPairs = numLetters / 2;
+        csfState.currentContrasts = csfComputePairedContrasts(startContrast, endContrast, numPairs);
+        csfState.currentLetters = csfPickLetters(numLetters);
     }
     csfState.waitingForClinician = true;
 
@@ -2241,29 +2389,53 @@ function csfProcessResponse(errors) {
     }
     if (csfState.pass === 1) {
         csfState.results[denom].coarseThreshold = threshold;
+        csfState.results[denom].allWrong = allWrong;
+        csfState.results[denom].errors = [...errors];
+        csfState.results[denom].contrasts = [...csfState.currentContrasts];
     } else {
         csfState.results[denom].refinedThreshold = threshold;
     }
 
     csfState.waitingForClinician = false;
 
-    // In pass 1: if patient got 0 correct, stop descending — they've hit their limit
-    const hitFloor = csfState.pass === 1 && allWrong;
+    // Pass 1 floor: require 2 CONSECUTIVE all-wrong levels to confirm
+    // the patient has truly hit their limit (not just a momentary lapse)
+    if (csfState.pass === 1) {
+        if (allWrong) {
+            csfState.consecutiveFloors++;
+        } else {
+            csfState.consecutiveFloors = 0;
+        }
+    }
+    const hitFloor = csfState.pass === 1 && csfState.consecutiveFloors >= 2;
 
-    // Advance to next level (unless floored)
+    // Advance to next level
     csfState.levelIndex++;
 
     if (hitFloor || csfState.levelIndex >= csfState.levels.length) {
         if (csfState.pass === 1) {
-            // Trim untested levels from pass 1 if we stopped early
-            const testedLevels = csfState.levels.slice(0, csfState.levelIndex);
             // Generate refined levels from what was actually tested
             csfState.pass = 2;
             csfState.levels = csfGenerateRefinedLevels();
             csfState.levelIndex = 0;
             csfNextLine();
         } else {
-            csfComplete();
+            // Before completing pass 2+, auto-detect impossibilities and retest them
+            const results = csfBuildResults();
+            const impossibilities = csfDetectImpossibilities(results);
+            // Only retest levels that haven't already been retested in this pass
+            const needsRetest = impossibilities.filter(d => {
+                const r = csfState.results[d];
+                return !r || r.refinedThreshold == null;
+            });
+            if (needsRetest.length > 0) {
+                // Extend the current pass with targeted retests
+                needsRetest.forEach(d => csfState.levels.push(d));
+                if (csfState.newLevels) needsRetest.forEach(d => csfState.newLevels.delete(d));
+                csfNextLine();
+            } else {
+                csfComplete();
+            }
         }
     } else {
         csfNextLine();
@@ -2279,6 +2451,40 @@ function csfBuildResults() {
         const sensitivity = 100 / threshold;
         return { denom, cpd, threshold, sensitivity };
     });
+}
+
+// Detect impossibilities: "can't see" at a size but CAN see at a harder (smaller) size.
+// Also catches non-monotonic dips past the peak. Returns denoms to auto-retest.
+function csfDetectImpossibilities(results) {
+    if (results.length < 3) return [];
+    // Sort by cpd ascending (big letters → small letters)
+    const sorted = [...results].sort((a, b) => a.cpd - b.cpd);
+    const retest = [];
+
+    // 1. "Can't see" flanked by measurable sensitivity at harder levels
+    for (let i = 0; i < sorted.length; i++) {
+        if (sorted[i].threshold >= 100) {
+            const harderVisible = sorted.slice(i + 1).some(r => r.threshold < 80);
+            if (harderVisible) retest.push(sorted[i].denom);
+        }
+    }
+
+    // 2. Non-monotonic dips past the peak (threshold suddenly spikes then drops)
+    let peakIdx = 0;
+    for (let i = 1; i < sorted.length; i++) {
+        if (sorted[i].threshold < sorted[peakIdx].threshold) peakIdx = i;
+    }
+    for (let i = peakIdx + 1; i < sorted.length - 1; i++) {
+        const prev = sorted[i - 1].threshold;
+        const curr = sorted[i].threshold;
+        const next = sorted[i + 1].threshold;
+        // Current is much worse than both neighbors — dip, shouldn't happen
+        if (curr > prev * 3 && curr > next * 3 && curr > 10) {
+            retest.push(sorted[i].denom);
+        }
+    }
+
+    return [...new Set(retest)];
 }
 
 // Detect noisy regions: places where normalized dB reverses direction unexpectedly
@@ -2710,9 +2916,11 @@ function renderCSFGraph(canvas, results) {
 
     const font = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
     ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(0, 0, w, h);
 
     // Margins
-    const ml = 56, mr = 20, mt = 20, mb = 58;
+    const ml = 64, mr = 20, mt = 20, mb = 72;
     const pw = w - ml - mr;
     const ph = h - mt - mb;
 
@@ -2830,6 +3038,19 @@ function renderCSFGraph(canvas, results) {
     const sortedResults = [...results].sort((a, b) => a.cpd - b.cpd);
     const patientPts = sortedResults.map(r => ({ x: toX(r.cpd), y: toY(r.sensitivity) }));
 
+    // Find patient's acuity crossover (where CS = 1.0, i.e. 100% contrast needed)
+    let crossoverCpd = null;
+    for (let i = 0; i < sortedResults.length - 1; i++) {
+        const r1 = sortedResults[i], r2 = sortedResults[i + 1];
+        if (r1.sensitivity >= 1.0 && r2.sensitivity < 1.0) {
+            const lc1 = Math.log10(r1.cpd), lc2 = Math.log10(r2.cpd);
+            const ls1 = Math.log10(r1.sensitivity), ls2 = Math.log10(r2.sensitivity);
+            const t = (0 - ls1) / (ls2 - ls1);
+            crossoverCpd = Math.pow(10, lc1 + t * (lc2 - lc1));
+            break;
+        }
+    }
+
     // Extrapolate right: extend to CS=1 (100% contrast = acuity limit)
     if (sortedResults.length >= 2) {
         const last = sortedResults[sortedResults.length - 1];
@@ -2843,6 +3064,7 @@ function renderCSFGraph(canvas, results) {
                 const logCpdAtCs1 = logCpd2 + (0 - logCs2) / slope; // logCS=0 means CS=1
                 const cpdAtCs1 = Math.pow(10, logCpdAtCs1);
                 patientPts.push({ x: toX(cpdAtCs1), y: toY(1.0) });
+                if (!crossoverCpd) crossoverCpd = cpdAtCs1;
             }
         }
     }
@@ -2927,34 +3149,78 @@ function renderCSFGraph(canvas, results) {
     ctx.stroke();
 
     // --- X-axis labels ---
-    ctx.font = `11px ${font}`;
+    // Standard Snellen acuity levels at fixed positions
+    const snellenTicks = [
+        { denom: 100, cpd: 6 },
+        { denom: 50,  cpd: 12 },
+        { denom: 40,  cpd: 15 },
+        { denom: 30,  cpd: 20 },
+        { denom: 25,  cpd: 24 },
+        { denom: 20,  cpd: 30 },
+        { denom: 15,  cpd: 40 },
+        { denom: 10,  cpd: 60 },
+    ];
     ctx.textAlign = 'center';
-    const xTicks = [6, 10, 15, 20, 30, 40, 60];
-    xTicks.forEach(cpd => {
-        const x = toX(cpd);
+
+    // Snellen labels (primary row)
+    ctx.font = `bold 10px ${font}`;
+    snellenTicks.forEach(t => {
+        const x = toX(t.cpd);
         ctx.fillStyle = 'rgba(255,255,255,0.5)';
-        ctx.fillText(cpd, x, mt + ph + 16);
+        ctx.fillText(`20/${t.denom}`, x, mt + ph + 16);
     });
-    // Snellen equivalents at data points
-    ctx.fillStyle = 'rgba(255,255,255,0.32)';
+
+    // cpd values (secondary, smaller)
     ctx.font = `9px ${font}`;
-    sortedResults.forEach(r => {
-        const x = toX(r.cpd);
-        const dl = Number.isInteger(r.denom) ? r.denom : Math.round(r.denom);
-        ctx.fillText(`20/${dl}`, x, mt + ph + 28);
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    snellenTicks.forEach(t => {
+        ctx.fillText(`${t.cpd} cpd`, toX(t.cpd), mt + ph + 28);
     });
-    // Title + layman
+
+    // Patient acuity crossover marker (where CS = 1)
+    if (crossoverCpd) {
+        const crossoverDenom = 600 / crossoverCpd;
+        const denomLabel = Math.round(crossoverDenom);
+        const cx = toX(crossoverCpd);
+        const cy = toY(1.0);
+
+        // Vertical marker line from curve to axis
+        ctx.strokeStyle = 'rgba(96, 165, 250, 0.35)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx, mt + ph);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Small dot at crossover
+        ctx.fillStyle = '#60a5fa';
+        ctx.beginPath();
+        ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Crossover Snellen label (highlighted)
+        ctx.font = `bold 12px ${font}`;
+        ctx.fillStyle = '#60a5fa';
+        ctx.textAlign = 'center';
+        ctx.fillText(`20/${denomLabel}`, cx, mt + ph + 44);
+        ctx.font = `8px ${font}`;
+        ctx.fillStyle = 'rgba(96, 165, 250, 0.7)';
+        ctx.fillText('acuity limit', cx, mt + ph + 55);
+    }
+
+    // Title
     ctx.fillStyle = 'rgba(255,255,255,0.35)';
     ctx.font = `10px ${font}`;
-    ctx.fillText('Spatial Frequency (cpd)', ml + pw / 2, mt + ph + 42);
+    ctx.textAlign = 'center';
+    ctx.fillText('Spatial Frequency (cpd)', ml + pw / 2, mt + ph + 68);
     ctx.font = `bold 8.5px ${font}`;
     ctx.fillStyle = 'rgba(255,255,255,0.2)';
     ctx.textAlign = 'left';
-    ctx.fillText('COARSE', ml, mt + ph + 54);
-    ctx.textAlign = 'center';
-    ctx.fillText('Detail \u2192', ml + pw / 2, mt + ph + 54);
+    ctx.fillText('BIG LETTERS', ml, mt + ph + 68);
     ctx.textAlign = 'right';
-    ctx.fillText('FINE', ml + pw, mt + ph + 54);
+    ctx.fillText('SMALL LETTERS', ml + pw, mt + ph + 68);
 
     // --- Y-axis labels ---
     ctx.font = `11px ${font}`;
@@ -2974,14 +3240,24 @@ function renderCSFGraph(canvas, results) {
     ctx.font = `10px ${font}`;
     ctx.fillText('Contrast Sensitivity', 0, 0);
     ctx.restore();
-    // Layman label — offset below the title
+    // Layman labels — separated at top and bottom of Y-axis
+    // Bottom: "Needs bolder" (low sensitivity = needs high contrast)
     ctx.save();
-    ctx.translate(14, mt + ph / 2);
+    ctx.translate(12, mt + ph - 20);
     ctx.rotate(-Math.PI / 2);
-    ctx.textAlign = 'center';
-    ctx.font = `bold 8.5px ${font}`;
-    ctx.fillStyle = 'rgba(255,255,255,0.18)';
-    ctx.fillText('needs bold \u2190\u2192 sees faint', 0, 14);
+    ctx.textAlign = 'left';
+    ctx.font = `bold 10px ${font}`;
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.fillText('\u2190 Needs bolder', 0, 0);
+    ctx.restore();
+    // Top: "Can see even if faint" (high sensitivity)
+    ctx.save();
+    ctx.translate(12, mt + 20);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = 'right';
+    ctx.font = `bold 10px ${font}`;
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.fillText('Can see faint \u2192', 0, 0);
     ctx.restore();
 
     // --- "You" label near patient curve peak ---

@@ -462,6 +462,9 @@
             border-bottom: 1px solid rgba(255,255,255,0.05);
             font-variant-numeric: tabular-nums;
         }
+        .result-above { color: #34d399; }
+        .result-avg   { color: rgba(255,255,255,0.5); }
+        .result-below { color: #f87171; }
 
         .csf-graph-canvas {
             width: 100%;
@@ -852,10 +855,9 @@
             <table class="results-table" id="results-table">
                 <thead>
                     <tr>
-                        <th>Snellen</th>
-                        <th>cpd</th>
-                        <th>Threshold %</th>
-                        <th>Sensitivity</th>
+                        <th>Letter Size</th>
+                        <th>Contrast Needed</th>
+                        <th>vs. Average</th>
                     </tr>
                 </thead>
                 <tbody id="results-tbody"></tbody>

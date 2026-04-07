@@ -1527,6 +1527,27 @@ h3 {
     color: rgba(255, 255, 255, 0.7);
 }
 
+/* Mirror toggle on light-background calibration card */
+.dist-cal-mirror-toggle {
+    border-left: 1px solid var(--border);
+    margin-left: 12px;
+}
+.dist-cal-mirror-toggle .mirror-toggle-switch {
+    background: rgba(0, 0, 0, 0.12);
+}
+.dist-cal-mirror-toggle .mirror-toggle-switch::after {
+    background: rgba(0, 0, 0, 0.35);
+}
+.dist-cal-mirror-toggle .mirror-toggle-text {
+    color: var(--text-secondary);
+}
+.dist-cal-mirror-toggle input:checked + .mirror-toggle-switch {
+    background: var(--cyan-500);
+}
+.dist-cal-mirror-toggle input:checked + .mirror-toggle-switch::after {
+    background: white;
+}
+
 .distance-test-display {
     position: relative;
     display: flex;
