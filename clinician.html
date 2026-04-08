@@ -66,7 +66,7 @@
         }
 
         .main {
-            max-width: 640px;
+            max-width: 960px;
             margin: 0 auto;
             padding: 24px;
         }
@@ -470,8 +470,101 @@
             width: 100%;
             height: 420px;
             border-radius: 8px;
-            background: rgba(0,0,0,0.2);
+            background: #ffffff;
         }
+
+        .csf-controls-row { display:flex; gap:8px; margin:8px 0 4px; }
+        .csf-lighting-btn { padding:4px 12px; border:1px solid rgba(255,255,255,0.15); border-radius:100px; background:rgba(255,200,50,0.08); color:rgba(255,255,255,0.6); font-family:inherit; font-size:0.7rem; font-weight:700; cursor:pointer; transition:all 0.15s; }
+        .csf-lighting-btn:hover { background:rgba(255,200,50,0.15); color:rgba(255,255,255,0.85); }
+        .csf-lighting-btn.mesopic-active { background:rgba(100,130,255,0.15); border-color:rgba(100,130,255,0.3); color:rgba(180,190,255,0.9); }
+        .csf-ref-toggles { display:flex; gap:5px; margin-bottom:8px; flex-wrap:wrap; }
+        .csf-ref-btn { padding:4px 10px; border:1px solid rgba(255,255,255,0.1); border-radius:100px; background:rgba(255,255,255,0.04); color:rgba(255,255,255,0.45); font-family:inherit; font-size:0.65rem; font-weight:600; cursor:pointer; transition:all 0.15s; }
+        .csf-ref-btn:hover { background:rgba(255,255,255,0.08); color:rgba(255,255,255,0.7); }
+        .csf-ref-btn.active { background:rgba(96,165,250,0.15); border-color:rgba(96,165,250,0.3); color:#93c5fd; }
+        .csf-ref-btn.csf-ref-dimmed { opacity:0.35; }
+        .csf-ref-btn.csf-ref-dimmed:hover { opacity:0.6; }
+        .csf-ref-btn.csf-ref-dimmed.active { opacity:0.7; }
+        .csf-ref-group-label { display:inline-block; width:100%; font-size:0.55rem; font-weight:700; color:rgba(255,255,255,0.2); text-transform:uppercase; letter-spacing:0.08em; margin-top:3px; }
+        .csf-ref-group-label:first-child { margin-top:0; }
+
+        .response-history {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 8px;
+            background: rgba(0,0,0,0.15);
+            font-size: 0.72rem;
+        }
+
+        .history-row {
+            display: flex;
+            align-items: center;
+            padding: 5px 8px;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+            gap: 8px;
+        }
+
+        .history-row:last-child { border-bottom: none; }
+
+        .history-row.history-acuity { background: rgba(16,185,129,0.08); }
+
+        .history-size {
+            font-weight: 700;
+            color: rgba(255,255,255,0.7);
+            min-width: 52px;
+            flex-shrink: 0;
+        }
+
+        .history-pass {
+            color: rgba(255,255,255,0.3);
+            min-width: 32px;
+            flex-shrink: 0;
+            font-size: 0.6rem;
+        }
+
+        .history-mode {
+            font-size: 0.55rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            padding: 1px 5px;
+            border-radius: 4px;
+            flex-shrink: 0;
+        }
+
+        .history-mode-wrong { color: #f87171; background: rgba(248,113,113,0.1); }
+        .history-mode-correct { color: #34d399; background: rgba(52,211,153,0.1); }
+
+        .history-letters {
+            display: flex;
+            gap: 2px;
+            flex-wrap: wrap;
+            flex: 1;
+        }
+
+        .history-letter {
+            display: inline-block;
+            padding: 1px 3px;
+            border-radius: 3px;
+            font-family: 'Arial', sans-serif;
+            font-weight: 700;
+            font-size: 0.7rem;
+        }
+
+        .history-letter-ok { color: rgba(255,255,255,0.6); }
+        .history-letter-err { color: #f87171; text-decoration: line-through; background: rgba(248,113,113,0.08); }
+
+        .history-undo {
+            background: none;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 4px;
+            color: rgba(255,255,255,0.35);
+            font-size: 0.55rem;
+            padding: 2px 6px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+
+        .history-undo:hover { color: #fbbf24; border-color: rgba(251,191,36,0.3); }
 
         .header-right {
             display: flex;
@@ -827,6 +920,10 @@
                 <button class="btn-next" id="btn-next">Next Line</button>
                 <button class="btn-abort" id="btn-abort">Cancel</button>
             </div>
+
+            <!-- Response history — scrollable log of previous lines -->
+            <div class="section-label" style="margin-top:12px">Response History</div>
+            <div id="response-history" class="response-history"></div>
         </div>
 
         <!-- Pass 3 suggestion panel -->
@@ -862,8 +959,27 @@
                 </thead>
                 <tbody id="results-tbody"></tbody>
             </table>
+            <div class="csf-ref-toggles" id="csf-ref-toggles">
+                <span class="csf-ref-group-label">Normal</span>
+                <button class="csf-ref-btn csf-ref-dimmed" data-ref="normal_mesopic">Normal Mesopic</button>
+                <button class="csf-ref-btn" data-ref="older_adult">Older Adult</button>
+                <span class="csf-ref-group-label">Elite</span>
+                <button class="csf-ref-btn" data-ref="elite_aviator">Elite Aviator</button>
+                <button class="csf-ref-btn" data-ref="elite_athlete">Elite Athlete</button>
+                <span class="csf-ref-group-label">Disease</span>
+                <button class="csf-ref-btn" data-ref="early_cataract">Early Cataract</button>
+                <span class="csf-ref-group-label">Surgery / Optics</span>
+                <button class="csf-ref-btn" data-ref="post_lasik">Post-LASIK</button>
+                <button class="csf-ref-btn csf-ref-dimmed" data-ref="post_lasik_mesopic">Post-LASIK Mesopic</button>
+                <button class="csf-ref-btn csf-ref-dimmed" data-ref="edof_iol">EDOF IOL</button>
+                <button class="csf-ref-btn csf-ref-dimmed" data-ref="mfiol">Multifocal IOL</button>
+                <button class="csf-ref-btn" data-ref="scleral_before">Scleral (Before)</button>
+                <button class="csf-ref-btn" data-ref="scleral_after">Scleral (After)</button>
+            </div>
             <canvas class="csf-graph-canvas" id="csf-graph"></canvas>
             <div class="results-actions">
+                <button class="btn-next" id="btn-run-mesopic" style="background:linear-gradient(135deg,#6366f1,#4f46e5)">&#9790; Run Mesopic Test</button>
+                <button class="btn-decline" id="btn-toggle-display" style="display:none">Switch to Mesopic View</button>
                 <button class="btn-next btn-save" id="btn-save-results">Save to Patient</button>
                 <button class="btn-decline" id="btn-copy-results">Copy Results to Clipboard</button>
                 <button class="btn-decline btn-back-acuity" id="btn-back-acuity">Back to Acuity Testing</button>

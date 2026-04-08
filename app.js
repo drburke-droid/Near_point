@@ -591,6 +591,10 @@ const CSF_LETTERS_RETEST = 6;  // 3 paired contrasts (lighter validation for ret
 const CSF_LETTERS_NEW    = 8;  // 4 paired contrasts (moderate validation for new levels)
 const CSF_MIN_CONTRAST = 1.25; // Display floor %
 
+const CSF_ACUITY_LEVELS = [20, 15, 12, 10]; // progressive acuity check denoms
+const CSF_ACUITY_LETTERS = 6;              // letters per acuity line
+const CSF_ACUITY_PASS = 3;                 // minimum correct to pass
+
 const csfState = {
     active: false,
     pass: 1,            // 1 = coarse, 2 = refined
@@ -603,7 +607,19 @@ const csfState = {
     clinicianWindow: null,
     waitingForClinician: false,
     consecutiveFloors: 0, // track consecutive all-wrong levels in pass 1
-    newLevels: null       // Set of denoms not tested in pass 1 (new interpolation points)
+    newLevels: null,      // Set of denoms not tested in pass 1 (new interpolation points)
+    // Acuity check phase (end of pass 1)
+    acuityPhase: false,
+    acuityIndex: 0,
+    acuityAnchor: null,   // last passing denom (patient CAN see at 100%)
+    acuityFail: null,     // first failing denom (patient CANNOT see at 100%)
+    lightingMode: 'photopic' // 'photopic' or 'mesopic'
+};
+
+// Store completed results per lighting mode for dual-curve display
+let csfCompletedResults = {
+    photopic: null,
+    mesopic: null
 };
 
 // --- Font Metrics Cache ---
@@ -783,7 +799,7 @@ function setupDistanceChannel() {
                 if (!csfState.active) $('#snellen-refresh-btn').click();
                 break;
             case 'csf-start-remote':
-                if (!csfState.active) csfStartTest();
+                if (!csfState.active) csfStartTest(data.lightingMode || 'photopic');
                 break;
             default:
                 // Forward CSF messages to the CSF handler
@@ -1917,11 +1933,16 @@ function renderDistanceTest() {
 
     if (csfState.active) {
         // CSF mode: use current level's Snellen denominator
-        effectiveDenom = csfState.levels[csfState.levelIndex] || csfState.levels[csfState.levels.length - 1];
+        if (csfState.acuityPhase) {
+            effectiveDenom = CSF_ACUITY_LEVELS[csfState.acuityIndex];
+            indicatorText = `Acuity Check — 20/${effectiveDenom}`;
+        } else {
+            effectiveDenom = csfState.levels[csfState.levelIndex] || csfState.levels[csfState.levels.length - 1];
+            indicatorText = `CSF Pass ${csfState.pass} — 20/${effectiveDenom}`;
+        }
         const arcminTotal = 5 * effectiveDenom / 20;
         const radians = arcminTotal * Math.PI / (180 * 60);
         letterHeightMM = distMM * Math.tan(radians);
-        indicatorText = `CSF Pass ${csfState.pass} — 20/${effectiveDenom}`;
         currentLetters = csfState.currentLetters;
         perLetterContrasts = csfState.currentContrasts;
     } else if (baileyLovieMode) {
@@ -1965,10 +1986,13 @@ function renderDistanceTest() {
     $('#snellen-indicator').textContent = indicatorText;
     broadcastLineUpdate();
 
-    // Calculate letter color from contrast (Weber contrast on white background)
-    // C = (Lb - Lt) / Lb, so Lt = Lb * (1 - C)
-    // With white bg (255): letterGray = 255 * (1 - contrastPercent/100)
-    const letterGray = Math.round(255 * (1 - contrastPercent / 100));
+    // Letter color from contrast — depends on lighting mode
+    // Photopic: dark letters on white background (Weber: Lt = 255 * (1 - C))
+    // Mesopic: light letters on black background (Lt = 255 * C)
+    const isMesopic = csfState.active && csfState.lightingMode === 'mesopic';
+    const letterGray = isMesopic
+        ? Math.round(255 * (contrastPercent / 100))
+        : Math.round(255 * (1 - contrastPercent / 100));
     const letterColor = `rgb(${letterGray}, ${letterGray}, ${letterGray})`;
 
     // Render
@@ -1977,8 +2001,6 @@ function renderDistanceTest() {
     container.style.fontFamily = optFont;
     container.style.transform = mirror ? 'scaleX(-1)' : 'none';
 
-    // Widen letter spacing at finer acuities (20/30 and smaller)
-    // so small letters don't crowd together
     const denom = Math.round(effectiveDenom);
     container.style.gap = denom <= 15 ? '0.8em'
                         : denom <= 20 ? '0.65em'
@@ -1994,7 +2016,10 @@ function renderDistanceTest() {
         span.className = 'snellen-letter';
         span.textContent = letter;
         if (perLetterContrasts && perLetterContrasts[i] != null) {
-            const g = Math.round(255 * (1 - perLetterContrasts[i] / 100));
+            const c = perLetterContrasts[i];
+            const g = isMesopic
+                ? Math.round(255 * (c / 100))
+                : Math.round(255 * (1 - c / 100));
             span.style.color = `rgb(${g}, ${g}, ${g})`;
         }
         container.appendChild(span);
@@ -2194,7 +2219,11 @@ function csfGenerateRefinedLevels() {
     }
 
     csfState.newLevels = newLevels;
-    return [...levels].sort((a, b) => b - a);
+
+    // Filter out any levels beyond the acuity limit — patient can't see those
+    const acuityLimitDenom = csfState.acuityFail || 0;
+    const filtered = [...levels].filter(d => d > acuityLimitDenom);
+    return filtered.sort((a, b) => b - a);
 }
 
 
@@ -2225,32 +2254,41 @@ function csfBroadcast(type, payload) {
     }
 }
 
-function csfStartTest() {
+function csfStartTest(lightingMode) {
     // Initialize state
     csfState.active = true;
     csfState.pass = 1;
     csfState.levelIndex = 0;
-    csfState.levels = [...CSF_ALL_LEVELS]; // pass 1 walks the full range
+    csfState.levels = [];
     csfState.results = {};
     csfState.waitingForClinician = false;
     csfState.consecutiveFloors = 0;
     csfState.newLevels = null;
+    csfState.acuityPhase = true;
+    csfState.acuityIndex = 0;
+    csfState.acuityAnchor = null;
+    csfState.acuityFail = null;
+    csfState.lightingMode = lightingMode || 'photopic';
+
+    // Apply mesopic visual mode — black background, no hallway image
+    const testScreen = $('#test-screen');
+    if (testScreen) {
+        testScreen.classList.toggle('mesopic-test', csfState.lightingMode === 'mesopic');
+    }
 
     // Open BroadcastChannel
-    // Reuse the persistent distance channel
     setupDistanceChannel();
     csfState.channel = distanceChannel;
 
     // Open clinician window
-    // Reuse existing clinician window if already open
     launchClinicianWindow();
     csfState.clinicianWindow = clinicianWindow;
 
     // Update UI to CSF mode
     csfUpdateUI();
 
-    // Wait briefly for clinician to load, then send first line
-    setTimeout(() => csfNextLine(), 800);
+    // Wait briefly for clinician to load, then start acuity check
+    setTimeout(() => csfAcuityNextLine(), 800);
 }
 
 function csfStopTest() {
@@ -2327,6 +2365,31 @@ function csfEstimateThresholdPaired(contrasts, errors) {
     return Math.sqrt(cc * nc);
 }
 
+function csfAcuityNextLine() {
+    const denom = CSF_ACUITY_LEVELS[csfState.acuityIndex];
+    csfState.currentLetters = csfPickLetters(CSF_ACUITY_LETTERS);
+    csfState.currentContrasts = Array(CSF_ACUITY_LETTERS).fill(100);
+    csfState.waitingForClinician = true;
+
+    renderDistanceTest();
+
+    const indicator = $('#snellen-indicator');
+    if (indicator) {
+        indicator.textContent = `Acuity Check — 20/${denom}`;
+        indicator.style.background = 'linear-gradient(135deg, #10b981, #059669)';
+    }
+
+    csfBroadcast('csf-line', {
+        snellenDenom: denom,
+        letters: csfState.currentLetters,
+        contrasts: csfState.currentContrasts,
+        pass: csfState.pass,
+        levelIndex: csfState.acuityIndex,
+        totalLevels: CSF_ACUITY_LEVELS.length,
+        acuityCheck: true
+    });
+}
+
 function csfNextLine() {
     const denom = csfState.levels[csfState.levelIndex];
     const startContrast = csfAdaptiveStart(csfState.levelIndex);
@@ -2376,6 +2439,45 @@ function csfNextLine() {
 }
 
 function csfProcessResponse(errors) {
+    // --- Acuity check phase: simple pass/fail at 100% contrast ---
+    if (csfState.acuityPhase) {
+        const denom = CSF_ACUITY_LEVELS[csfState.acuityIndex];
+        const correct = errors.filter(e => !e).length;
+        const passed = correct >= CSF_ACUITY_PASS;
+        csfState.waitingForClinician = false;
+
+        if (passed) {
+            csfState.acuityAnchor = denom;
+            csfState.acuityIndex++;
+            if (csfState.acuityIndex < CSF_ACUITY_LEVELS.length) {
+                csfAcuityNextLine();
+                return;
+            }
+            // All acuity levels passed — exceptional acuity
+        } else {
+            csfState.acuityFail = denom;
+        }
+
+        // Acuity check done — now start pass 1 contrast sweep.
+        // Only test sizes the patient can actually see (at or above acuity anchor).
+        // The acuity anchor size itself is excluded since it was barely visible
+        // at 100% — any lower contrast would be invisible.
+        csfState.acuityPhase = false;
+        csfState.pass = 1;
+        const acuityLimitDenom = csfState.acuityFail || 0;
+        csfState.levels = CSF_ALL_LEVELS.filter(d => d > acuityLimitDenom);
+        // If acuityAnchor passed but acuityFail is the next size, don't include
+        // the anchor in contrast testing — it was 100% only
+        if (csfState.acuityAnchor && csfState.levels.includes(csfState.acuityAnchor)) {
+            // Keep it — the sweep will test contrast threshold at this size
+        }
+        csfState.levelIndex = 0;
+        csfState.consecutiveFloors = 0;
+        csfNextLine();
+        return;
+    }
+
+    // --- Normal CSF processing ---
     const denom = csfState.levels[csfState.levelIndex];
     const allWrong = errors.every(e => e === 1);
     // Use paired estimator for pass 2+ (requires both letters correct per level)
@@ -2392,8 +2494,12 @@ function csfProcessResponse(errors) {
         csfState.results[denom].allWrong = allWrong;
         csfState.results[denom].errors = [...errors];
         csfState.results[denom].contrasts = [...csfState.currentContrasts];
+        csfState.results[denom].letters = [...csfState.currentLetters];
     } else {
         csfState.results[denom].refinedThreshold = threshold;
+        csfState.results[denom].refinedErrors = [...errors];
+        csfState.results[denom].refinedContrasts = [...csfState.currentContrasts];
+        csfState.results[denom].refinedLetters = [...csfState.currentLetters];
     }
 
     csfState.waitingForClinician = false;
@@ -2414,7 +2520,7 @@ function csfProcessResponse(errors) {
 
     if (hitFloor || csfState.levelIndex >= csfState.levels.length) {
         if (csfState.pass === 1) {
-            // Generate refined levels from what was actually tested
+            // Pass 1 done — proceed to pass 2 (acuity already established)
             csfState.pass = 2;
             csfState.levels = csfGenerateRefinedLevels();
             csfState.levelIndex = 0;
@@ -2444,13 +2550,20 @@ function csfProcessResponse(errors) {
 
 function csfBuildResults() {
     const allDenoms = Object.keys(csfState.results).map(Number).sort((a, b) => b - a);
-    return allDenoms.map(denom => {
+    const built = allDenoms.map(denom => {
         const r = csfState.results[denom];
         const threshold = r.refinedThreshold || r.coarseThreshold || 100;
         const cpd = 600 / denom;
         const sensitivity = 100 / threshold;
-        return { denom, cpd, threshold, sensitivity };
+        const letterData = r.refinedLetters
+            ? { letters: r.refinedLetters, errors: r.refinedErrors, contrasts: r.refinedContrasts }
+            : (r.letters ? { letters: r.letters, errors: r.errors, contrasts: r.contrasts } : null);
+        return { denom, cpd, threshold, sensitivity, letterData };
     });
+    // Attach acuity anchor: reliable 100%-contrast acuity limit from end of pass 1
+    built.acuityAnchor = csfState.acuityAnchor;
+    built.acuityFail = csfState.acuityFail;
+    return built;
 }
 
 // Detect impossibilities: "can't see" at a size but CAN see at a harder (smaller) size.
@@ -2461,15 +2574,21 @@ function csfDetectImpossibilities(results) {
     const sorted = [...results].sort((a, b) => a.cpd - b.cpd);
     const retest = [];
 
-    // 1. "Can't see" flanked by measurable sensitivity at harder levels
+    // 1. "Can't see" flanked by measurable sensitivity at harder levels.
+    //    Also flag the isolated visible results beyond the gap — likely lucky guesses.
     for (let i = 0; i < sorted.length; i++) {
         if (sorted[i].threshold >= 100) {
-            const harderVisible = sorted.slice(i + 1).some(r => r.threshold < 80);
-            if (harderVisible) retest.push(sorted[i].denom);
+            const harderVisible = sorted.slice(i + 1).filter(r => r.threshold < 80);
+            if (harderVisible.length > 0) {
+                retest.push(sorted[i].denom);
+                harderVisible.forEach(r => retest.push(r.denom));
+            }
         }
     }
 
     // 2. Non-monotonic dips past the peak (threshold suddenly spikes then drops)
+    //    A point worse than both neighbors by 2× is suspicious — likely a lucky guess
+    //    at one neighbor or a missed letter at the current level.
     let peakIdx = 0;
     for (let i = 1; i < sorted.length; i++) {
         if (sorted[i].threshold < sorted[peakIdx].threshold) peakIdx = i;
@@ -2478,9 +2597,12 @@ function csfDetectImpossibilities(results) {
         const prev = sorted[i - 1].threshold;
         const curr = sorted[i].threshold;
         const next = sorted[i + 1].threshold;
-        // Current is much worse than both neighbors — dip, shouldn't happen
-        if (curr > prev * 3 && curr > next * 3 && curr > 10) {
+        // Current is worse than both neighbors — a dip that shouldn't happen
+        if (curr > prev * 1.8 && curr > next * 1.8) {
             retest.push(sorted[i].denom);
+            // Also retest the better neighbor — it might be the lucky guess
+            if (next < prev) retest.push(sorted[i + 1].denom);
+            else retest.push(sorted[i - 1].denom);
         }
     }
 
@@ -2558,14 +2680,28 @@ function csfStartPass3(denoms) {
 }
 
 function csfFinalize(finalResults) {
+    const mode = csfState.lightingMode || 'photopic';
+    finalResults.lightingMode = mode;
+
+    // Store results for this lighting mode (for dual-curve display)
+    csfCompletedResults[mode] = finalResults;
+
     // Broadcast to clinician
-    csfBroadcast('csf-complete', { results: finalResults });
+    csfBroadcast('csf-complete', {
+        results: finalResults,
+        acuityAnchor: finalResults.acuityAnchor || null,
+        acuityFail: finalResults.acuityFail || null,
+        lightingMode: mode
+    });
 
     // Show results on patient display
     csfShowPatientResults(finalResults);
 
     csfState.active = false;
     csfState.waitingForClinician = false;
+    // Remove mesopic test class
+    const testScreen = $('#test-screen');
+    if (testScreen) testScreen.classList.remove('mesopic-test');
     csfUpdateUI();
 }
 
@@ -2576,6 +2712,7 @@ function csfDebug() {
     const fakeResults = [];
     let prevCS = 0;
     let pastPeak = false;
+    const SLOAN_DBG = ['C', 'D', 'E', 'F', 'L', 'N', 'O', 'P', 'T', 'Z'];
     for (const denom of CSF_ALL_LEVELS) {
         const cpd = 600 / denom;
         const norm = csfNormative(cpd);
@@ -2592,22 +2729,77 @@ function csfDebug() {
         if (sensitivity < 1.0) break;
         prevCS = sensitivity;
         const threshold = 100 / sensitivity;
-        fakeResults.push({ denom, cpd, threshold, sensitivity });
+        // Generate fake letter data for optotype grid
+        const numLetters = 8;
+        const fakeLetters = [];
+        const fakeContrasts = [];
+        const fakeErrors = [];
+        for (let i = 0; i < numLetters; i++) {
+            fakeLetters.push(SLOAN_DBG[Math.floor(Math.random() * SLOAN_DBG.length)]);
+            const c = 100 * Math.pow(threshold / 100, i / (numLetters - 1));
+            fakeContrasts.push(c);
+            // Letters above threshold are wrong, below are correct
+            fakeErrors.push(c < threshold ? 1 : 0);
+        }
+        const letterData = { letters: fakeLetters, contrasts: fakeContrasts, errors: fakeErrors };
+        fakeResults.push({ denom, cpd, threshold, sensitivity, letterData });
+    }
+
+    // Fake acuity anchor: last result that had CS > 1 passes, next one fails
+    const lastVisible = fakeResults[fakeResults.length - 1];
+    if (lastVisible) {
+        fakeResults.acuityAnchor = lastVisible.denom;
+        const nextSmaller = CSF_ACUITY_LEVELS.find(d => d < lastVisible.denom);
+        fakeResults.acuityFail = nextSmaller || null;
+        // Also set on csfState so csfBuildResults picks it up
+        csfState.acuityAnchor = fakeResults.acuityAnchor;
+        csfState.acuityFail = fakeResults.acuityFail;
     }
 
     // Make sure distance tab is active and channel exists
     setupDistanceChannel();
+    csfState.channel = distanceChannel;
     showScreen('test');
     $('#test-screen').classList.add('distance-clean');
     const distTab = $('[data-tab="distance"]');
     if (distTab) distTab.click();
 
-    // Launch clinician and send results
+    // Enable mirror by default in debug mode
+    const mirrorCb = $('#mirror-checkbox');
+    if (mirrorCb) mirrorCb.checked = true;
+
+    // Show patient results immediately
+    csfShowPatientResults(fakeResults);
+
+    // Try to open clinician window (may be popup-blocked without user gesture)
     launchClinicianWindow();
+    // Broadcast after a delay so clinician has time to load
     setTimeout(() => {
-        csfBroadcast('csf-complete', { results: fakeResults });
-        csfShowPatientResults(fakeResults);
-    }, 600);
+        csfBroadcast('csf-complete', {
+            results: fakeResults,
+            acuityAnchor: fakeResults.acuityAnchor || null,
+            acuityFail: fakeResults.acuityFail || null
+        });
+    }, 800);
+
+    // If popup was blocked, add a clickable button to open clinician manually
+    setTimeout(() => {
+        if (!clinicianWindow || clinicianWindow.closed) {
+            const overlay = $('#csf-results-overlay');
+            if (overlay && !$('#debug-open-clinician')) {
+                const btn = document.createElement('button');
+                btn.id = 'debug-open-clinician';
+                btn.textContent = 'Open Clinician View';
+                btn.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:999;padding:12px 24px;font-size:14px;font-weight:700;background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.2)';
+                btn.onclick = () => {
+                    launchClinicianWindow();
+                    setTimeout(() => csfBroadcast('csf-complete', { results: fakeResults, acuityAnchor: fakeResults.acuityAnchor || null, acuityFail: fakeResults.acuityFail || null }), 800);
+                    btn.remove();
+                };
+                document.body.appendChild(btn);
+            }
+        }
+    }, 1000);
 }
 
 // Auto-trigger if ?debug in URL
@@ -2647,6 +2839,25 @@ function csfHandleClinicianMessage(data) {
                     levelIndex: csfState.levelIndex,
                     totalLevels: csfState.levels.length
                 });
+            }
+            break;
+        case 'csf-ref-update':
+            // Clinician toggled reference overlays — update patient graph
+            activeCSFRefs = new Set(data.refs || []);
+            csfLightingMode = data.lighting || 'photopic';
+            if (lastCSFResultsForGraph) {
+                // Switch the results background to match lighting mode
+                const overlay = document.getElementById('csf-results-overlay');
+                if (overlay) {
+                    overlay.classList.toggle('mesopic-results', csfLightingMode === 'mesopic');
+                }
+                // Switch which results to display as primary
+                const displayMode = csfLightingMode;
+                const primary = csfCompletedResults[displayMode] || lastCSFResultsForGraph;
+                primary.lightingMode = displayMode;
+                lastCSFResultsForGraph = primary;
+                const canvas = document.getElementById('csf-patient-canvas');
+                if (canvas) renderCSFGraph(canvas, primary);
             }
             break;
     }
@@ -2690,45 +2901,20 @@ function csfShowPatientResults(results) {
 
     overlay.classList.remove('hidden');
 
+    // Apply mesopic visual mode to results overlay
+    const mode = results.lightingMode || 'photopic';
+    overlay.classList.toggle('mesopic-results', mode === 'mesopic');
+
+    // Mirror the entire results overlay (title + canvas) when mirror is active
+    const mirrorEl = $('#mirror-checkbox');
+    const content = overlay.querySelector('.csf-results-content');
+    if (content) {
+        content.style.transform = (mirrorEl && mirrorEl.checked) ? 'scaleX(-1)' : 'none';
+    }
+
     const canvas = $('#csf-patient-canvas');
     if (canvas) renderCSFGraph(canvas, results);
-
-    // Wire up reference toggle buttons
-    $$('.csf-ref-btn').forEach(btn => {
-        btn.onclick = () => {
-            const ref = btn.dataset.ref;
-            if (activeCSFRefs.has(ref)) {
-                activeCSFRefs.delete(ref);
-                btn.classList.remove('active');
-            } else {
-                activeCSFRefs.add(ref);
-                btn.classList.add('active');
-            }
-            if (canvas && lastCSFResultsForGraph) {
-                renderCSFGraph(canvas, lastCSFResultsForGraph);
-            }
-        };
-    });
-
-    // Wire up lighting mode toggle
-    const modeBtn = $('#csf-lighting-toggle');
-    if (modeBtn) {
-        modeBtn.onclick = () => {
-            csfLightingMode = csfLightingMode === 'photopic' ? 'mesopic' : 'photopic';
-            modeBtn.textContent = csfLightingMode === 'photopic' ? '☀ Photopic' : '☾ Mesopic';
-            modeBtn.classList.toggle('mesopic-active', csfLightingMode === 'mesopic');
-            // Update button visibility based on lighting mode
-            $$('.csf-ref-btn').forEach(b => {
-                const scenario = CSF_SCENARIOS[b.dataset.ref];
-                if (!scenario) return;
-                const match = scenario.lighting === csfLightingMode || scenario.lighting === 'mixed';
-                b.classList.toggle('csf-ref-dimmed', !match);
-            });
-            if (canvas && lastCSFResultsForGraph) {
-                renderCSFGraph(canvas, lastCSFResultsForGraph);
-            }
-        };
-    }
+    // Reference overlays are controlled from the clinician window via broadcast
 }
 
 function csfClosePatientResults() {
@@ -2915,25 +3101,35 @@ function renderCSFGraph(canvas, results) {
     ctx.scale(dpr, dpr);
 
     const font = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    const optFont = '"Arial", "Helvetica", sans-serif';
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = '#1a1a2e';
+
+    // Determine color scheme from lighting mode
+    const graphMode = results.lightingMode || 'photopic';
+    const dark = graphMode === 'mesopic'; // dark bg for mesopic
+    const bgColor = dark ? '#000000' : '#ffffff';
+    const fgAlpha = (a) => dark ? `rgba(255,255,255,${a})` : `rgba(0,0,0,${a})`;
+    const curveColor = dark ? '#60a5fa' : '#2563eb';
+    const curveGlow = dark ? 'rgba(96,165,250,0.3)' : 'rgba(37,99,235,0.25)';
+
+    ctx.fillStyle = bgColor;
     ctx.fillRect(0, 0, w, h);
 
-    // Margins
-    const ml = 64, mr = 20, mt = 20, mb = 72;
+    // Margins — generous left margin for y-axis labels at distance
+    const ml = 90, mr = 20, mt = 20, mb = 72;
     const pw = w - ml - mr;
     const ph = h - mt - mb;
 
-    // Axis ranges — raw CSF (log-log)
+    // Axis ranges — ends at 20/10 (60 cpd) so last column is rightmost
     const logCpdMin = 0.65;  // ~4.5 cpd
-    const logCpdMax = 1.85;  // ~71 cpd
+    const logCpdMax = Math.log10(60);  // 1.778 — 20/10
     const logCsMin = -0.1;   // ~0.8 CS
     const logCsMax = 2.0;    // ~100 CS
 
     function toX(cpd) { return ml + pw * (Math.log10(Math.max(4.5, cpd)) - logCpdMin) / (logCpdMax - logCpdMin); }
     function toY(cs) { return mt + ph * (1 - (Math.log10(Math.max(0.8, cs)) - logCsMin) / (logCsMax - logCsMin)); }
 
-    // Sample a model curve as canvas points (includes one point past CS floor for clean exit)
+    // Sample a model curve as canvas points
     function sampleCurve(fn, steps) {
         const pts = [];
         for (let i = 0; i <= steps; i++) {
@@ -2941,50 +3137,187 @@ function renderCSFGraph(canvas, results) {
             const cpd = Math.pow(10, logCpd);
             const cs = fn(cpd);
             pts.push({ x: toX(cpd), y: toY(cs) });
-            if (cs < 0.8) break; // one point past floor so curve exits cleanly
+            if (cs < 0.8) break;
         }
         return pts;
     }
 
+    // Interpolate patient CS at a given cpd from the spline (for optotype placement)
+    function patientCSatCpd(cpd, sortedRes) {
+        if (sortedRes.length === 0) return null;
+        if (sortedRes.length === 1) return sortedRes[0].sensitivity;
+        const lc = Math.log10(cpd);
+        // Clamp to tested range
+        if (cpd <= sortedRes[0].cpd) return sortedRes[0].sensitivity;
+        if (cpd >= sortedRes[sortedRes.length - 1].cpd) return sortedRes[sortedRes.length - 1].sensitivity;
+        for (let i = 0; i < sortedRes.length - 1; i++) {
+            const lc1 = Math.log10(sortedRes[i].cpd), lc2 = Math.log10(sortedRes[i + 1].cpd);
+            if (lc >= lc1 && lc <= lc2) {
+                const t = (lc - lc1) / (lc2 - lc1);
+                const ls1 = Math.log10(Math.max(0.1, sortedRes[i].sensitivity));
+                const ls2 = Math.log10(Math.max(0.1, sortedRes[i + 1].sensitivity));
+                return Math.pow(10, ls1 + t * (ls2 - ls1));
+            }
+        }
+        return sortedRes[sortedRes.length - 1].sensitivity;
+    }
+
     // --- Fine grid ---
     ctx.lineWidth = 0.5;
-    // Vertical
     [6, 8, 10, 12, 15, 20, 30, 40, 60].forEach(cpd => {
         const x = toX(cpd);
-        ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+        ctx.strokeStyle = fgAlpha(0.06);
         ctx.beginPath(); ctx.moveTo(x, mt); ctx.lineTo(x, mt + ph); ctx.stroke();
     });
-    // Horizontal
     [1, 2, 5, 10, 20, 50, 100].forEach(cs => {
         const y = toY(cs);
-        ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+        ctx.strokeStyle = fgAlpha(0.05);
         ctx.beginPath(); ctx.moveTo(ml, y); ctx.lineTo(ml + pw, y); ctx.stroke();
     });
 
     // --- Axes ---
-    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.strokeStyle = fgAlpha(0.15);
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(ml, mt); ctx.lineTo(ml, mt + ph); ctx.lineTo(ml + pw, mt + ph);
     ctx.stroke();
 
-    // --- Average normative curve ---
+    // --- Optotype letter grid (rendered first, behind curves) ---
+    const sortedResults = [...results].sort((a, b) => a.cpd - b.cpd);
+    const SLOAN_ALL = ['C', 'D', 'E', 'F', 'L', 'N', 'O', 'P', 'T', 'Z'];
+    const baseFontPx = ph * 0.07;
+    const minContrast = 1.0;
+
+    // Check if this is the patient display with physical sizing available
+    const pxPerMm = parseFloat(localStorage.getItem('nearpoint_dist_px_per_mm') || '0');
+    const distEl = document.getElementById('distance-test-slider');
+    const unitEl = document.getElementById('distance-test-unit');
+    const usePhysical = pxPerMm > 0 && distEl && unitEl;
+
+    // Helper: compute font size for a given denom
+    function optFontSize(denom) {
+        let fs;
+        if (usePhysical) {
+            const sliderVal = parseFloat(distEl.value);
+            const unit = unitEl.dataset.unit;
+            const distMM = unit === 'ft' ? sliderVal * 304.8 : sliderVal * 1000;
+            const arcminTotal = 5 * denom / 20;
+            const radians = arcminTotal * Math.PI / (180 * 60);
+            const letterHeightMM = distMM * Math.tan(radians);
+            fs = letterHeightMM * pxPerMm * 0.85;
+        } else {
+            fs = baseFontPx * (denom / 100);
+        }
+        return Math.max(6, Math.min(fs, ph * 0.25));
+    }
+
+    // Determine uniform column spacing based on widest column (leftmost = largest denom)
+    const widestFontPx = optFontSize(100);
+    const minColSpacing = widestFontPx * 1.3;
+    const numCols = Math.max(3, Math.min(40, Math.floor(pw / minColSpacing)));
+    const colSpacing = pw / numCols;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(ml, mt, pw, ph);
+    ctx.clip();
+
+    for (let col = 0; col < numCols; col++) {
+        const x = ml + (col + 0.5) * colSpacing;
+        // Map x position back to cpd/denom
+        const logCpd = logCpdMin + (x - ml) / pw * (logCpdMax - logCpdMin);
+        const cpd = Math.pow(10, logCpd);
+        const denom = 600 / cpd;
+
+        const fontSize = optFontSize(denom);
+        const letterHeight = fontSize * 1.15;
+
+        // Letters span full plot height: CS=1 (100% contrast, bottom) to top
+        const yBottom = toY(1.0);
+        const yTop = mt;
+        const availableH = yBottom - yTop;
+        const maxLetters = Math.max(2, Math.floor(availableH / letterHeight));
+        const numLetters = Math.min(maxLetters, 30);
+
+        // Find closest tested result for letter data
+        let bestResult = null, bestDist = Infinity;
+        for (const r of sortedResults) {
+            const d = Math.abs(Math.log10(r.cpd) - logCpd);
+            if (d < bestDist) { bestDist = d; bestResult = r; }
+        }
+        const ld = (bestResult && bestDist < 0.08) ? bestResult.letterData : null;
+
+        // Pre-build column letters: seeded PRNG, no consecutive repeats
+        const denomSeed = Math.round(denom);
+        let rng = (denomSeed * 2654435761) >>> 0; // Knuth multiplicative hash seed
+        const colLetters = [];
+        for (let i = 0; i < numLetters; i++) {
+            rng = (rng * 1664525 + 1013904223) >>> 0; // LCG step
+            let idx = (rng >>> 16) % SLOAN_ALL.length;
+            // Reject consecutive duplicates
+            if (i > 0 && SLOAN_ALL[idx] === colLetters[i - 1]) {
+                idx = (idx + 1) % SLOAN_ALL.length;
+            }
+            colLetters.push(SLOAN_ALL[idx]);
+        }
+
+        // Map tested letters: each tested contrast claims only its single closest grid slot
+        const testedSlots = new Map(); // gridIndex → letter
+        if (ld && ld.letters && ld.contrasts) {
+            for (let j = 0; j < ld.contrasts.length; j++) {
+                if (ld.errors[j]) continue;
+                const logC = Math.log10(Math.max(1, ld.contrasts[j]));
+                let bestI = -1, bestD = Infinity;
+                for (let i = 0; i < numLetters; i++) {
+                    const t = numLetters <= 1 ? 0 : i / (numLetters - 1);
+                    const gridContrast = 100 * Math.pow(minContrast / 100, t);
+                    const d = Math.abs(Math.log10(Math.max(1, gridContrast)) - logC);
+                    if (d < bestD) { bestD = d; bestI = i; }
+                }
+                if (bestI >= 0 && bestD < 0.15 && !testedSlots.has(bestI)) {
+                    testedSlots.set(bestI, ld.letters[j]);
+                }
+            }
+        }
+
+        for (let i = 0; i < numLetters; i++) {
+            const t = numLetters <= 1 ? 0 : i / (numLetters - 1);
+            const contrast = 100 * Math.pow(minContrast / 100, t);
+            const cs = 100 / contrast;
+            const y = toY(cs);
+            // Mesopic: light letters on dark bg. Photopic: dark letters on white bg.
+            const gray = dark
+                ? Math.round(255 * (contrast / 100))
+                : Math.round(255 * (1 - contrast / 100));
+
+            const letter = testedSlots.has(i) ? testedSlots.get(i) : colLetters[i];
+
+            ctx.fillStyle = `rgb(${gray},${gray},${gray})`;
+            ctx.font = `bold ${fontSize}px ${optFont}`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(letter, x, y);
+        }
+    }
+
+    ctx.restore();
+
+    // --- Average normative curve (bold for distance viewing) ---
     const normPts = sampleCurve(cpd => csfNormative(cpd), 80);
-    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([4, 3]);
+    ctx.strokeStyle = fgAlpha(0.3);
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([8, 5]);
     ctx.beginPath();
     normPts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // Label
     const normLabelX = normPts[Math.round(normPts.length * 0.15)];
     if (normLabelX) {
-        ctx.fillStyle = 'rgba(255,255,255,0.35)';
-        ctx.font = `10px ${font}`;
+        ctx.fillStyle = fgAlpha(0.4);
+        ctx.font = `bold 16px ${font}`;
         ctx.textAlign = 'left';
-        ctx.fillText('Average', normLabelX.x + 4, normLabelX.y - 7);
+        ctx.fillText('Average', normLabelX.x + 6, normLabelX.y - 10);
     }
 
     // --- Reference overlays (data-driven) ---
@@ -2992,7 +3325,6 @@ function renderCSFGraph(canvas, results) {
         const scenario = CSF_SCENARIOS[refKey];
         if (!scenario) return;
         const pts = scenario.points;
-        // Sample the interpolated curve only within the data range
         const minCpd = pts[0].cpd, maxCpd = pts[pts.length - 1].cpd;
         const refPts = [];
         const steps = 60;
@@ -3005,71 +3337,117 @@ function renderCSFGraph(canvas, results) {
         if (refPts.length < 2) return;
 
         const isDashed = scenario.confidence === 'approximate';
-        ctx.strokeStyle = scenario.color + '77';
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash(isDashed ? [4, 4] : [3, 3]);
+        // Bold curves for 25ft viewing on patient display
+        ctx.strokeStyle = scenario.color;
+        ctx.lineWidth = 4;
+        ctx.setLineDash(isDashed ? [8, 6] : []);
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
         ctx.beginPath();
         refPts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
         ctx.stroke();
         ctx.setLineDash([]);
 
-        // Data point dots
         pts.forEach(pt => {
             if (pt.cs < 0.8) return;
             const px = toX(pt.cpd), py = toY(pt.cs);
-            ctx.fillStyle = scenario.color + 'aa';
+            ctx.fillStyle = scenario.color;
             ctx.beginPath();
-            ctx.arc(px, py, 2, 0, Math.PI * 2);
+            ctx.arc(px, py, 5, 0, Math.PI * 2);
             ctx.fill();
         });
 
-        // Label near the curve peak
         const labelPt = refPts[Math.round(refPts.length * 0.18)];
         if (labelPt) {
-            ctx.fillStyle = scenario.color + 'aa';
-            ctx.font = `9px ${font}`;
+            ctx.fillStyle = scenario.color;
+            ctx.font = `bold 18px ${font}`;
             ctx.textAlign = 'left';
-            ctx.fillText(scenario.label, labelPt.x + 4, labelPt.y - 6);
+            ctx.fillText(scenario.label, labelPt.x + 8, labelPt.y - 12);
         }
     });
 
-    // --- Patient spline (raw CS) ---
-    // Include all measured points; extrapolate to CS=1 (high-contrast acuity limit)
-    const sortedResults = [...results].sort((a, b) => a.cpd - b.cpd);
-    const patientPts = sortedResults.map(r => ({ x: toX(r.cpd), y: toY(r.sensitivity) }));
-
-    // Find patient's acuity crossover (where CS = 1.0, i.e. 100% contrast needed)
-    let crossoverCpd = null;
-    for (let i = 0; i < sortedResults.length - 1; i++) {
-        const r1 = sortedResults[i], r2 = sortedResults[i + 1];
-        if (r1.sensitivity >= 1.0 && r2.sensitivity < 1.0) {
-            const lc1 = Math.log10(r1.cpd), lc2 = Math.log10(r2.cpd);
-            const ls1 = Math.log10(r1.sensitivity), ls2 = Math.log10(r2.sensitivity);
-            const t = (0 - ls1) / (ls2 - ls1);
-            crossoverCpd = Math.pow(10, lc1 + t * (lc2 - lc1));
-            break;
+    // --- Patient spline ---
+    // Build clean curve: include results up to peak, then decline until first
+    // "can't see" — anything visible beyond a "can't see" gap is a lucky guess.
+    // Also enforce monotonic decline past the peak.
+    const allSorted = [...results].sort((a, b) => a.cpd - b.cpd);
+    let peakIdx = 0;
+    for (let i = 1; i < allSorted.length; i++) {
+        if (allSorted[i].sensitivity > allSorted[peakIdx].sensitivity) peakIdx = i;
+    }
+    const plotResults = [];
+    // Include everything up to the peak (skip any "can't see" in the plateau region)
+    for (let i = 0; i <= peakIdx; i++) {
+        if (allSorted[i].threshold < 100) plotResults.push(allSorted[i]);
+    }
+    // Past peak: include declining results, stop at first "can't see"
+    for (let i = peakIdx + 1; i < allSorted.length; i++) {
+        if (allSorted[i].threshold >= 100) break;
+        plotResults.push(allSorted[i]);
+    }
+    // Enforce monotonic decline past the peak
+    if (plotResults.length >= 3) {
+        let pIdx = 0;
+        for (let i = 1; i < plotResults.length; i++) {
+            if (plotResults[i].sensitivity > plotResults[pIdx].sensitivity) pIdx = i;
+        }
+        for (let i = pIdx + 1; i < plotResults.length; i++) {
+            if (plotResults[i].sensitivity > plotResults[i - 1].sensitivity) {
+                const prev = plotResults[i - 1];
+                const next = (i + 1 < plotResults.length) ? plotResults[i + 1] : null;
+                if (next && next.sensitivity < prev.sensitivity) {
+                    const lc = Math.log10(plotResults[i].cpd);
+                    const lc1 = Math.log10(prev.cpd), lc2 = Math.log10(next.cpd);
+                    const ls1 = Math.log10(prev.sensitivity), ls2 = Math.log10(next.sensitivity);
+                    const t = (lc - lc1) / (lc2 - lc1);
+                    plotResults[i] = { ...plotResults[i], sensitivity: Math.pow(10, ls1 + t * (ls2 - ls1)) };
+                } else {
+                    plotResults[i] = { ...plotResults[i], sensitivity: prev.sensitivity };
+                }
+            }
         }
     }
+    const patientPts = plotResults.map(r => ({ x: toX(r.cpd), y: toY(r.sensitivity) }));
 
-    // Extrapolate right: extend to CS=1 (100% contrast = acuity limit)
-    if (sortedResults.length >= 2) {
-        const last = sortedResults[sortedResults.length - 1];
-        const prev = sortedResults[sortedResults.length - 2];
-        if (last.sensitivity > 1.0) {
-            // Log-log extrapolation to find cpd where CS = 1.0
-            const logCpd1 = Math.log10(prev.cpd), logCpd2 = Math.log10(last.cpd);
-            const logCs1 = Math.log10(prev.sensitivity), logCs2 = Math.log10(last.sensitivity);
-            const slope = (logCs2 - logCs1) / (logCpd2 - logCpd1);
-            if (slope < 0) { // only if curve is declining
-                const logCpdAtCs1 = logCpd2 + (0 - logCs2) / slope; // logCS=0 means CS=1
-                const cpdAtCs1 = Math.pow(10, logCpdAtCs1);
-                patientPts.push({ x: toX(cpdAtCs1), y: toY(1.0) });
-                if (!crossoverCpd) crossoverCpd = cpdAtCs1;
+    // Acuity anchor determines where the curve crosses CS=1. Period.
+    // This was established by a reliable 100%-contrast test (6 letters, ≥3 correct)
+    // before any contrast sweep began.
+    const acuityAnchor = results.acuityAnchor || null;
+    const acuityFail = results.acuityFail || null;
+    let crossoverCpd = null;
+
+    if (acuityAnchor && acuityFail) {
+        // Crossover is midpoint (log-space) between last pass and first fail
+        const anchorCpd = 600 / acuityAnchor;
+        const failCpd = 600 / acuityFail;
+        crossoverCpd = Math.pow(10, (Math.log10(anchorCpd) + Math.log10(failCpd)) / 2);
+    } else if (acuityAnchor && !acuityFail) {
+        // All acuity levels passed — mark at the last passing size
+        crossoverCpd = 600 / acuityAnchor;
+    } else {
+        // No acuity anchor (legacy data) — extrapolate from last two points
+        if (plotResults.length >= 2) {
+            const last = plotResults[plotResults.length - 1];
+            const prev = plotResults[plotResults.length - 2];
+            if (last.sensitivity > 1.0) {
+                const logCpd1 = Math.log10(prev.cpd), logCpd2 = Math.log10(last.cpd);
+                const logCs1 = Math.log10(prev.sensitivity), logCs2 = Math.log10(last.sensitivity);
+                const slope = (logCs2 - logCs1) / (logCpd2 - logCpd1);
+                if (slope < 0) crossoverCpd = Math.pow(10, logCpd2 + (0 - logCs2) / slope);
             }
         }
     }
 
-    // Extrapolate left: extend line to y-axis from first two points
+    // Force the curve to pass through CS=1 at the crossover point
+    if (crossoverCpd) {
+        // Remove any plot points past the crossover (they'd be beyond acuity limit)
+        const crossX = toX(crossoverCpd);
+        while (patientPts.length > 0 && patientPts[patientPts.length - 1].x > crossX + 1) {
+            patientPts.pop();
+        }
+        patientPts.push({ x: crossX, y: toY(1.0) });
+    }
+
     if (patientPts.length >= 2) {
         const dx = patientPts[1].x - patientPts[0].x;
         const dy = patientPts[1].y - patientPts[0].y;
@@ -3080,59 +3458,78 @@ function renderCSFGraph(canvas, results) {
     const spline = catmullRomSpline(patientPts, 24);
 
     // --- Green/red fill between patient and normative ---
-    // Sample normative at each spline x position
+    // Extend patient curve conceptually: past acuity limit, patient is at CS=1 (bottom)
+    // so the area between normative and bottom continues as red
+    const bottomY = toY(1.0);
+    const splineEndX = spline.length > 0 ? spline[spline.length - 1].x : ml;
+
     for (let fillPass = 0; fillPass < 2; fillPass++) {
-        // fillPass 0 = above norm (green), 1 = below norm (red)
         ctx.save();
         ctx.beginPath();
         ctx.rect(ml, mt, pw, ph);
         ctx.clip();
 
-        const fillColor = fillPass === 0
-            ? 'rgba(52, 211, 153, 0.18)'
-            : 'rgba(248, 113, 113, 0.18)';
+        ctx.fillStyle = fillPass === 0
+            ? 'rgba(34, 197, 94, 0.12)'
+            : 'rgba(239, 68, 68, 0.12)';
 
-        ctx.fillStyle = fillColor;
-
-        // Walk the spline, collect segments where patient is above/below norm
-        let segment = []; // collect {x, patY, normY} for current segment
+        let segment = [];
         const flushSegment = () => {
             if (segment.length < 2) { segment = []; return; }
             ctx.beginPath();
-            // Trace patient curve forward
             ctx.moveTo(segment[0].x, segment[0].normY);
             segment.forEach(pt => ctx.lineTo(pt.x, pt.patY));
-            // Trace normative curve backward
-            for (let i = segment.length - 1; i >= 0; i--) {
-                ctx.lineTo(segment[i].x, segment[i].normY);
-            }
-            ctx.closePath();
-            ctx.fill();
-            segment = [];
+            for (let i = segment.length - 1; i >= 0; i--) ctx.lineTo(segment[i].x, segment[i].normY);
+            ctx.closePath(); ctx.fill(); segment = [];
         };
 
+        // Walk the spline
         spline.forEach(p => {
             const logCpd = logCpdMin + (p.x - ml) / pw * (logCpdMax - logCpdMin);
             const cpd = Math.pow(10, logCpd);
             const normY = toY(csfNormative(cpd));
-
-            const above = p.y < normY; // canvas y is inverted
+            const above = p.y < normY;
             if ((fillPass === 0 && above) || (fillPass === 1 && !above)) {
                 segment.push({ x: p.x, patY: p.y, normY });
-            } else {
-                flushSegment();
-            }
+            } else { flushSegment(); }
         });
         flushSegment();
+
+        // Red fill extension: past acuity limit, patient is at bottom (CS≤1),
+        // normative may still be above — fill between normative and x-axis
+        if (fillPass === 1 && crossoverCpd) {
+            const extSeg = [];
+            const extSteps = 40;
+            for (let i = 0; i <= extSteps; i++) {
+                const x = splineEndX + (ml + pw - splineEndX) * i / extSteps;
+                if (x > ml + pw) break;
+                const lc = logCpdMin + (x - ml) / pw * (logCpdMax - logCpdMin);
+                const cpd = Math.pow(10, lc);
+                const normCS = csfNormative(cpd);
+                if (normCS <= 0.8) break; // normative has dropped off
+                const normY = toY(normCS);
+                if (normY < bottomY) { // normative is above CS=1
+                    extSeg.push({ x, patY: bottomY, normY });
+                }
+            }
+            if (extSeg.length >= 2) {
+                ctx.beginPath();
+                ctx.moveTo(extSeg[0].x, extSeg[0].normY);
+                extSeg.forEach(pt => ctx.lineTo(pt.x, pt.patY));
+                for (let i = extSeg.length - 1; i >= 0; i--) ctx.lineTo(extSeg[i].x, extSeg[i].normY);
+                ctx.closePath(); ctx.fill();
+            }
+        }
+
         ctx.restore();
     }
 
-    // --- Patient curve glow ---
+    // --- Patient curve glow (bold for distance) ---
     ctx.save();
-    ctx.shadowColor = 'rgba(96, 165, 250, 0.3)';
-    ctx.shadowBlur = 10;
-    ctx.strokeStyle = 'rgba(96, 165, 250, 0.12)';
-    ctx.lineWidth = 5;
+    ctx.shadowColor = curveGlow;
+    ctx.shadowBlur = 12;
+    ctx.strokeStyle = curveColor + '1a';
+    ctx.lineWidth = 10;
     ctx.lineJoin = 'round';
     ctx.beginPath();
     spline.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
@@ -3140,8 +3537,8 @@ function renderCSFGraph(canvas, results) {
     ctx.restore();
 
     // --- Patient curve ---
-    ctx.strokeStyle = '#60a5fa';
-    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = curveColor;
+    ctx.lineWidth = 4.5;
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
     ctx.beginPath();
@@ -3149,7 +3546,6 @@ function renderCSFGraph(canvas, results) {
     ctx.stroke();
 
     // --- X-axis labels ---
-    // Standard Snellen acuity levels at fixed positions
     const snellenTicks = [
         { denom: 100, cpd: 6 },
         { denom: 50,  cpd: 12 },
@@ -3162,110 +3558,137 @@ function renderCSFGraph(canvas, results) {
     ];
     ctx.textAlign = 'center';
 
-    // Snellen labels (primary row)
-    ctx.font = `bold 10px ${font}`;
+    // Bold axis labels for distance viewing
+    ctx.font = `bold 16px ${font}`;
     snellenTicks.forEach(t => {
-        const x = toX(t.cpd);
-        ctx.fillStyle = 'rgba(255,255,255,0.5)';
-        ctx.fillText(`20/${t.denom}`, x, mt + ph + 16);
+        ctx.fillStyle = fgAlpha(0.6);
+        ctx.fillText(`20/${t.denom}`, toX(t.cpd), mt + ph + 20);
     });
 
-    // cpd values (secondary, smaller)
-    ctx.font = `9px ${font}`;
-    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    ctx.font = `13px ${font}`;
+    ctx.fillStyle = fgAlpha(0.35);
     snellenTicks.forEach(t => {
-        ctx.fillText(`${t.cpd} cpd`, toX(t.cpd), mt + ph + 28);
+        ctx.fillText(`${t.cpd} cpd`, toX(t.cpd), mt + ph + 36);
     });
 
-    // Patient acuity crossover marker (where CS = 1)
+    // Patient acuity crossover marker
     if (crossoverCpd) {
-        const crossoverDenom = 600 / crossoverCpd;
-        const denomLabel = Math.round(crossoverDenom);
+        const denomLabel = Math.round(600 / crossoverCpd);
         const cx = toX(crossoverCpd);
         const cy = toY(1.0);
 
-        // Vertical marker line from curve to axis
-        ctx.strokeStyle = 'rgba(96, 165, 250, 0.35)';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([3, 3]);
-        ctx.beginPath();
-        ctx.moveTo(cx, cy);
-        ctx.lineTo(cx, mt + ph);
-        ctx.stroke();
+        ctx.strokeStyle = curveColor + '66';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx, mt + ph); ctx.stroke();
         ctx.setLineDash([]);
 
-        // Small dot at crossover
-        ctx.fillStyle = '#60a5fa';
-        ctx.beginPath();
-        ctx.arc(cx, cy, 4, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.fillStyle = curveColor;
+        ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI * 2); ctx.fill();
 
-        // Crossover Snellen label (highlighted)
-        ctx.font = `bold 12px ${font}`;
-        ctx.fillStyle = '#60a5fa';
+        ctx.font = `bold 20px ${font}`;
+        ctx.fillStyle = curveColor;
         ctx.textAlign = 'center';
-        ctx.fillText(`20/${denomLabel}`, cx, mt + ph + 44);
-        ctx.font = `8px ${font}`;
-        ctx.fillStyle = 'rgba(96, 165, 250, 0.7)';
-        ctx.fillText('acuity limit', cx, mt + ph + 55);
+        ctx.fillText(`20/${denomLabel}`, cx, mt + ph + 54);
+        ctx.font = `bold 12px ${font}`;
+        ctx.fillStyle = curveColor + 'b3';
+        ctx.fillText('acuity limit', cx, mt + ph + 68);
     }
 
-    // Title
-    ctx.fillStyle = 'rgba(255,255,255,0.35)';
-    ctx.font = `10px ${font}`;
+    // X-axis title
+    ctx.fillStyle = fgAlpha(0.35);
+    ctx.font = `bold 14px ${font}`;
     ctx.textAlign = 'center';
     ctx.fillText('Spatial Frequency (cpd)', ml + pw / 2, mt + ph + 68);
-    ctx.font = `bold 8.5px ${font}`;
-    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+    ctx.font = `bold 12px ${font}`;
+    ctx.fillStyle = fgAlpha(0.2);
     ctx.textAlign = 'left';
     ctx.fillText('BIG LETTERS', ml, mt + ph + 68);
     ctx.textAlign = 'right';
     ctx.fillText('SMALL LETTERS', ml + pw, mt + ph + 68);
 
-    // --- Y-axis labels ---
-    ctx.font = `11px ${font}`;
+    // --- Y-axis labels (bold for distance) ---
+    ctx.font = `bold 14px ${font}`;
     ctx.textAlign = 'right';
     [1, 2, 5, 10, 20, 50, 100].forEach(cs => {
         const y = toY(cs);
         if (y < mt || y > mt + ph) return;
-        ctx.fillStyle = 'rgba(255,255,255,0.45)';
-        ctx.fillText(cs, ml - 6, y + 4);
+        ctx.fillStyle = fgAlpha(0.5);
+        ctx.fillText(cs, ml - 6, y + 5);
     });
-    // Title
     ctx.save();
     ctx.translate(14, mt + ph / 2);
     ctx.rotate(-Math.PI / 2);
     ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(255,255,255,0.3)';
-    ctx.font = `10px ${font}`;
+    ctx.fillStyle = fgAlpha(0.3);
+    ctx.font = `bold 14px ${font}`;
     ctx.fillText('Contrast Sensitivity', 0, 0);
     ctx.restore();
-    // Layman labels — separated at top and bottom of Y-axis
-    // Bottom: "Needs bolder" (low sensitivity = needs high contrast)
+    // Layman Y-axis labels
     ctx.save();
     ctx.translate(12, mt + ph - 20);
     ctx.rotate(-Math.PI / 2);
     ctx.textAlign = 'left';
-    ctx.font = `bold 10px ${font}`;
-    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.font = `bold 14px ${font}`;
+    ctx.fillStyle = fgAlpha(0.3);
     ctx.fillText('\u2190 Needs bolder', 0, 0);
     ctx.restore();
-    // Top: "Can see even if faint" (high sensitivity)
     ctx.save();
     ctx.translate(12, mt + 20);
     ctx.rotate(-Math.PI / 2);
     ctx.textAlign = 'right';
-    ctx.font = `bold 10px ${font}`;
-    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.font = `bold 14px ${font}`;
+    ctx.fillStyle = fgAlpha(0.3);
     ctx.fillText('Can see faint \u2192', 0, 0);
     ctx.restore();
 
-    // --- "You" label near patient curve peak ---
+    // --- Draw second curve if the other lighting mode has results ---
+    const otherMode = graphMode === 'photopic' ? 'mesopic' : 'photopic';
+    const otherResults = csfCompletedResults[otherMode];
+    if (otherResults && otherResults.length > 0) {
+        const otherColor = otherMode === 'mesopic' ? '#818cf8' : '#f59e0b';
+        const otherLabel = otherMode === 'mesopic' ? 'Mesopic' : 'Photopic';
+        const otherSorted = [...otherResults].filter(r => r.threshold < 100).sort((a, b) => a.cpd - b.cpd);
+        if (otherSorted.length >= 2) {
+            const otherPts = otherSorted.map(r => ({ x: toX(r.cpd), y: toY(r.sensitivity) }));
+            // Add crossover point if anchor exists
+            const oAnchor = otherResults.acuityAnchor, oFail = otherResults.acuityFail;
+            if (oAnchor && oFail) {
+                const oCross = Math.pow(10, (Math.log10(600/oAnchor) + Math.log10(600/oFail)) / 2);
+                const cx = toX(oCross);
+                while (otherPts.length > 0 && otherPts[otherPts.length-1].x > cx + 1) otherPts.pop();
+                otherPts.push({ x: cx, y: toY(1.0) });
+            }
+            if (otherPts.length >= 2) {
+                const oSpline = catmullRomSpline(otherPts, 24);
+                ctx.strokeStyle = otherColor;
+                ctx.lineWidth = 3;
+                ctx.setLineDash([10, 6]);
+                ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+                ctx.beginPath();
+                oSpline.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+                ctx.stroke();
+                ctx.setLineDash([]);
+                // Label
+                const oLabelPt = oSpline[Math.round(oSpline.length * 0.15)];
+                if (oLabelPt) {
+                    ctx.fillStyle = otherColor;
+                    ctx.font = `bold 16px ${font}`;
+                    ctx.textAlign = 'left';
+                    ctx.fillText(otherLabel, oLabelPt.x + 8, oLabelPt.y + 20);
+                }
+            }
+        }
+    }
+
+    // --- Label current curve ---
+    const modeLabel = graphMode === 'mesopic' ? 'Mesopic' : (otherResults ? 'Photopic' : '');
+    // --- "You" label (large for distance) ---
     const peakPt = patientPts.reduce((best, p) => p.y < best.y ? p : best, patientPts[0]);
-    ctx.fillStyle = '#60a5fa';
-    ctx.font = `bold 11px ${font}`;
+    ctx.fillStyle = curveColor;
+    ctx.font = `bold 22px ${font}`;
     ctx.textAlign = 'center';
-    ctx.fillText('You', peakPt.x, peakPt.y - 12);
+    ctx.fillText(modeLabel ? `You (${modeLabel})` : 'You', peakPt.x, peakPt.y - 18);
 }
 
 function initLuminanceCalibration() {

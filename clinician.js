@@ -9,6 +9,10 @@ let errors = [];          // [0,0,1,0,...] per letter
 let testComplete = false;
 let markMode = 'wrong';   // 'wrong' = mark incorrect (default), 'correct' = mark correct
 let lastCompletedResults = null; // stashed after test completes
+let responseHistory = [];        // running log of submitted responses
+let activeCSFRefs = new Set();
+let csfLightingMode = 'photopic';
+let csfCompletedResults = { photopic: null, mesopic: null };
 let activePatientId = null;
 let activePatient = null;        // { id, name, email }
 
@@ -172,6 +176,10 @@ channel.onmessage = (e) => {
             showLine(data);
             break;
         case 'csf-complete':
+            // Reattach acuity anchor and lighting mode to results array
+            if (data.acuityAnchor != null) data.results.acuityAnchor = data.acuityAnchor;
+            if (data.acuityFail != null) data.results.acuityFail = data.acuityFail;
+            if (data.lightingMode) data.results.lightingMode = data.lightingMode;
             showResults(data.results);
             break;
         case 'csf-suggest-pass3':
@@ -193,6 +201,12 @@ channel.onmessage = (e) => {
 // --- Show a new line of letters ---
 function showLine(data) {
     currentLine = data;
+    // Clear history at the start of a new test
+    if (data.pass === 1 && data.levelIndex === 0 && !data.acuityCheck) {
+        responseHistory = [];
+        const hc = $('#response-history');
+        if (hc) hc.innerHTML = '';
+    }
     // In "mark correct" mode, default all to wrong so clinician taps the correct ones
     errors = new Array(data.letters.length).fill(markMode === 'correct' ? 1 : 0);
     testComplete = false;
@@ -201,10 +215,17 @@ function showLine(data) {
     resultsPanel.classList.add('hidden');
     testPanel.classList.remove('hidden');
 
-    statusBadge.textContent = `Pass ${data.pass} — 20/${data.snellenDenom}`;
-    statusBadge.className = 'status-badge waiting';
-
-    levelInfo.innerHTML = `<strong>20/${data.snellenDenom}</strong> — Pass ${data.pass}, Level ${data.levelIndex + 1} of ${data.totalLevels}`;
+    if (data.acuityCheck) {
+        statusBadge.textContent = `Acuity — 20/${data.snellenDenom}`;
+        statusBadge.className = 'status-badge waiting';
+        statusBadge.style.background = 'linear-gradient(135deg, #10b981, #059669)';
+        levelInfo.innerHTML = `<strong>20/${data.snellenDenom}</strong> — Acuity Check (100% contrast, need 3/${data.letters.length} correct)`;
+    } else {
+        statusBadge.textContent = `Pass ${data.pass} — 20/${data.snellenDenom}`;
+        statusBadge.className = 'status-badge waiting';
+        statusBadge.style.background = '';
+        levelInfo.innerHTML = `<strong>20/${data.snellenDenom}</strong> — Pass ${data.pass}, Level ${data.levelIndex + 1} of ${data.totalLevels}`;
+    }
 
     // Progress: combine passes (pass 1: 0-50%, pass 2: 50-100%)
     const passOffset = (data.pass - 1) * 50;
@@ -317,10 +338,91 @@ $('#btn-mark-mode').addEventListener('click', () => {
     switchMarkMode(markMode === 'wrong' ? 'correct' : 'wrong');
 });
 
+// --- Response history ---
+function renderResponseHistory() {
+    const container = $('#response-history');
+    if (!container) return;
+    container.innerHTML = '';
+
+    responseHistory.forEach((entry, idx) => {
+        const row = document.createElement('div');
+        row.className = 'history-row' + (entry.acuityCheck ? ' history-acuity' : '');
+
+        // Size label
+        const sizeEl = document.createElement('span');
+        sizeEl.className = 'history-size';
+        const denomLabel = Number.isInteger(entry.snellenDenom) ? entry.snellenDenom : Math.round(entry.snellenDenom);
+        sizeEl.textContent = `20/${denomLabel}`;
+        row.appendChild(sizeEl);
+
+        // Pass label
+        const passEl = document.createElement('span');
+        passEl.className = 'history-pass';
+        passEl.textContent = entry.acuityCheck ? 'AQ' : `P${entry.pass}`;
+        row.appendChild(passEl);
+
+        // Mark mode indicator
+        const modeEl = document.createElement('span');
+        modeEl.className = 'history-mode ' + (entry.markMode === 'correct' ? 'history-mode-correct' : 'history-mode-wrong');
+        modeEl.textContent = entry.markMode === 'correct' ? 'MC' : 'MW';
+        modeEl.title = entry.markMode === 'correct' ? 'Mark Correct mode' : 'Mark Wrong mode';
+        row.appendChild(modeEl);
+
+        // Letters with error highlighting
+        const lettersEl = document.createElement('span');
+        lettersEl.className = 'history-letters';
+        entry.letters.forEach((letter, i) => {
+            const span = document.createElement('span');
+            span.className = 'history-letter ' + (entry.errors[i] ? 'history-letter-err' : 'history-letter-ok');
+            span.textContent = letter;
+            // Show contrast as tooltip
+            const c = entry.contrasts[i];
+            span.title = c < 10 ? c.toFixed(1) + '%' : Math.round(c) + '%';
+            lettersEl.appendChild(span);
+        });
+        row.appendChild(lettersEl);
+
+        // Undo button (only for the most recent entry)
+        if (idx === responseHistory.length - 1) {
+            const undoBtn = document.createElement('button');
+            undoBtn.className = 'history-undo';
+            undoBtn.textContent = 'undo';
+            undoBtn.title = 'Remove this response and re-show the line';
+            undoBtn.onclick = () => {
+                const removed = responseHistory.pop();
+                renderResponseHistory();
+                // Re-show the line so clinician can re-mark it
+                if (removed) {
+                    channel.postMessage({ type: 'csf-undo' });
+                }
+            };
+            row.appendChild(undoBtn);
+        }
+
+        container.appendChild(row);
+    });
+
+    // Auto-scroll to bottom
+    container.scrollTop = container.scrollHeight;
+}
+
 // --- Send response to patient display ---
 btnNext.addEventListener('click', () => {
     if (!currentLine) return;
     btnNext.disabled = true;
+
+    // Record to response history before sending
+    responseHistory.push({
+        snellenDenom: currentLine.snellenDenom,
+        pass: currentLine.pass,
+        letters: [...currentLine.letters],
+        contrasts: [...currentLine.contrasts],
+        errors: [...errors],
+        markMode: markMode,
+        acuityCheck: currentLine.acuityCheck || false
+    });
+    renderResponseHistory();
+
     channel.postMessage({ type: 'csf-response', errors: errors });
 });
 
@@ -351,6 +453,9 @@ $('#btn-decline-pass3').addEventListener('click', () => {
 function showResults(results) {
     testComplete = true;
     lastCompletedResults = results;
+    // Store by lighting mode for dual-curve display
+    const mode = results.lightingMode || 'photopic';
+    csfCompletedResults[mode] = results;
     testPanel.classList.add('hidden');
     waitingPanel.classList.add('hidden');
     resultsPanel.classList.remove('hidden');
@@ -391,6 +496,61 @@ function showResults(results) {
     // Render CSF graph
     const canvas = $('#csf-graph');
     renderCSFGraph(canvas, results);
+
+    // Show/hide mesopic and display toggle buttons based on what's been tested
+    const mesopicBtn = $('#btn-run-mesopic');
+    const toggleBtn = $('#btn-toggle-display');
+    if (mode === 'photopic' && !csfCompletedResults.mesopic) {
+        // Photopic just completed, no mesopic yet — offer to run it
+        mesopicBtn.style.display = '';
+        toggleBtn.style.display = 'none';
+    } else {
+        // Mesopic done (or viewing mesopic results) — hide run button, show toggle
+        mesopicBtn.style.display = 'none';
+        if (csfCompletedResults.photopic && csfCompletedResults.mesopic) {
+            toggleBtn.style.display = '';
+            toggleBtn.dataset.mode = mode;
+            toggleBtn.textContent = mode === 'mesopic' ? 'Switch to Photopic View' : 'Switch to Mesopic View';
+        } else {
+            toggleBtn.style.display = 'none';
+        }
+    }
+
+    // Wire up reference overlay toggles
+    wireRefToggles();
+}
+
+function broadcastRefUpdate() {
+    channel.postMessage({
+        type: 'csf-ref-update',
+        refs: [...activeCSFRefs],
+        lighting: csfLightingMode
+    });
+}
+
+function refreshRefGraphs() {
+    if (lastCompletedResults) {
+        const canvas = $('#csf-graph');
+        if (canvas) renderCSFGraph(canvas, lastCompletedResults);
+    }
+    broadcastRefUpdate();
+}
+
+function wireRefToggles() {
+    document.querySelectorAll('.csf-ref-btn').forEach(btn => {
+        btn.onclick = () => {
+            const ref = btn.dataset.ref;
+            if (activeCSFRefs.has(ref)) {
+                activeCSFRefs.delete(ref);
+                btn.classList.remove('active');
+            } else {
+                activeCSFRefs.add(ref);
+                btn.classList.add('active');
+            }
+            refreshRefGraphs();
+        };
+    });
+
 }
 
 function showCancelled() {
@@ -546,9 +706,10 @@ function renderCSFGraph(canvas, results) {
     const ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
     const font = 'Inter, -apple-system, sans-serif';
+    const optFont = '"Arial", "Helvetica", sans-serif';
     ctx.clearRect(0, 0, w, h);
-    // Solid background so clipboard capture is self-contained (not transparent)
-    ctx.fillStyle = '#1a1a2e';
+    // White background for optotype letter visibility
+    ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, w, h);
 
     const ml = 58, mr = 16, mt = 18, mb = 64;
@@ -572,27 +733,137 @@ function renderCSFGraph(canvas, results) {
         return pts;
     }
 
+    // Interpolate patient CS at a given cpd
+    function patientCSatCpd(cpd, sortedRes) {
+        if (sortedRes.length === 0) return null;
+        if (sortedRes.length === 1) return sortedRes[0].sensitivity;
+        const lc = Math.log10(cpd);
+        if (cpd <= sortedRes[0].cpd) return sortedRes[0].sensitivity;
+        if (cpd >= sortedRes[sortedRes.length - 1].cpd) return sortedRes[sortedRes.length - 1].sensitivity;
+        for (let i = 0; i < sortedRes.length - 1; i++) {
+            const lc1 = Math.log10(sortedRes[i].cpd), lc2 = Math.log10(sortedRes[i + 1].cpd);
+            if (lc >= lc1 && lc <= lc2) {
+                const t = (lc - lc1) / (lc2 - lc1);
+                const ls1 = Math.log10(Math.max(0.1, sortedRes[i].sensitivity));
+                const ls2 = Math.log10(Math.max(0.1, sortedRes[i + 1].sensitivity));
+                return Math.pow(10, ls1 + t * (ls2 - ls1));
+            }
+        }
+        return sortedRes[sortedRes.length - 1].sensitivity;
+    }
+
     // Grid
     ctx.lineWidth = 0.5;
     [6,8,10,12,15,20,30,40,60].forEach(cpd => {
-        ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+        ctx.strokeStyle = 'rgba(0,0,0,0.06)';
         const x = toX(cpd);
         ctx.beginPath(); ctx.moveTo(x, mt); ctx.lineTo(x, mt+ph); ctx.stroke();
     });
     [1,2,5,10,20,50,100].forEach(cs => {
-        ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+        ctx.strokeStyle = 'rgba(0,0,0,0.05)';
         const y = toY(cs);
         ctx.beginPath(); ctx.moveTo(ml, y); ctx.lineTo(ml+pw, y); ctx.stroke();
     });
 
     // Axes
-    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.15)';
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(ml, mt); ctx.lineTo(ml, mt+ph); ctx.lineTo(ml+pw, mt+ph); ctx.stroke();
 
+    // --- Optotype letter grid (rendered behind curves) ---
+    const sortedResults = [...results].sort((a, b) => a.cpd - b.cpd);
+    const SLOAN_ALL = ['C','D','E','F','L','N','O','P','T','Z'];
+    const baseFontPx = ph * 0.07;
+    const minContrast = 1.0;
+
+    function optFontSize(denom) {
+        return Math.max(6, Math.min(baseFontPx * (denom / 100), ph * 0.25));
+    }
+
+    // Uniform column spacing based on widest column
+    const widestFontPx = optFontSize(100);
+    const minColSpacing = widestFontPx * 1.3;
+    const numCols = Math.max(3, Math.min(40, Math.floor(pw / minColSpacing)));
+    const colSpacing = pw / numCols;
+
+    ctx.save();
+    ctx.beginPath(); ctx.rect(ml, mt, pw, ph); ctx.clip();
+
+    for (let col = 0; col < numCols; col++) {
+        const x = ml + (col + 0.5) * colSpacing;
+        const logCpd = logCpdMin + (x - ml) / pw * (logCpdMax - logCpdMin);
+        const cpd = Math.pow(10, logCpd);
+        const denom = 600 / cpd;
+
+        const fontSize = optFontSize(denom);
+        const letterHeight = fontSize * 1.15;
+        const yBottom = toY(1.0);
+        const yTop = mt;
+        const availableH = yBottom - yTop;
+        const maxLetters = Math.max(2, Math.floor(availableH / letterHeight));
+        const numLetters = Math.min(maxLetters, 30);
+
+        let bestResult = null, bestDist = Infinity;
+        for (const r of sortedResults) {
+            const d = Math.abs(Math.log10(r.cpd) - logCpd);
+            if (d < bestDist) { bestDist = d; bestResult = r; }
+        }
+        const ld = (bestResult && bestDist < 0.08) ? bestResult.letterData : null;
+        const denomSeed = Math.round(denom);
+
+        // Seeded PRNG, no consecutive repeats
+        let rng = (denomSeed * 2654435761) >>> 0;
+        const colLetters = [];
+        for (let i = 0; i < numLetters; i++) {
+            rng = (rng * 1664525 + 1013904223) >>> 0;
+            let idx = (rng >>> 16) % SLOAN_ALL.length;
+            if (i > 0 && SLOAN_ALL[idx] === colLetters[i - 1]) {
+                idx = (idx + 1) % SLOAN_ALL.length;
+            }
+            colLetters.push(SLOAN_ALL[idx]);
+        }
+
+        // Each tested contrast claims only its single closest grid slot
+        const testedSlots = new Map();
+        if (ld && ld.letters && ld.contrasts) {
+            for (let j = 0; j < ld.contrasts.length; j++) {
+                if (ld.errors[j]) continue;
+                const logC = Math.log10(Math.max(1, ld.contrasts[j]));
+                let bestI = -1, bestD = Infinity;
+                for (let i = 0; i < numLetters; i++) {
+                    const t = numLetters <= 1 ? 0 : i / (numLetters - 1);
+                    const gridContrast = 100 * Math.pow(minContrast / 100, t);
+                    const d = Math.abs(Math.log10(Math.max(1, gridContrast)) - logC);
+                    if (d < bestD) { bestD = d; bestI = i; }
+                }
+                if (bestI >= 0 && bestD < 0.15 && !testedSlots.has(bestI)) {
+                    testedSlots.set(bestI, ld.letters[j]);
+                }
+            }
+        }
+
+        for (let i = 0; i < numLetters; i++) {
+            const t = numLetters <= 1 ? 0 : i / (numLetters - 1);
+            const contrast = 100 * Math.pow(minContrast / 100, t);
+            const cs = 100 / contrast;
+            const y = toY(cs);
+            const gray = Math.round(255 * (1 - contrast / 100));
+
+            const letter = testedSlots.has(i) ? testedSlots.get(i) : colLetters[i];
+
+            ctx.fillStyle = `rgb(${gray},${gray},${gray})`;
+            ctx.font = `bold ${fontSize}px ${optFont}`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(letter, x, y);
+        }
+    }
+
+    ctx.restore();
+
     // Average curve
     const normPts = sampleCurve(csfNormative, 80);
-    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.25)';
     ctx.lineWidth = 1;
     ctx.setLineDash([4,3]);
     ctx.beginPath();
@@ -600,39 +871,114 @@ function renderCSFGraph(canvas, results) {
     ctx.stroke();
     ctx.setLineDash([]);
     const nl = normPts[Math.round(normPts.length*0.15)];
-    if (nl) { ctx.fillStyle='rgba(255,255,255,0.25)'; ctx.font=`8px ${font}`; ctx.textAlign='left'; ctx.fillText('Average', nl.x+4, nl.y-6); }
+    if (nl) { ctx.fillStyle='rgba(0,0,0,0.35)'; ctx.font=`8px ${font}`; ctx.textAlign='left'; ctx.fillText('Average', nl.x+4, nl.y-6); }
 
-    // Patient spline — extrapolate to CS=1 (acuity limit)
-    const sortedResults = [...results].sort((a, b) => a.cpd - b.cpd);
-    const patientPts = sortedResults.map(r => ({ x: toX(r.cpd), y: toY(r.sensitivity) }));
-    // Find crossover (CS = 1)
-    let crossoverCpd = null;
-    for (let i = 0; i < sortedResults.length - 1; i++) {
-        const r1 = sortedResults[i], r2 = sortedResults[i + 1];
-        if (r1.sensitivity >= 1.0 && r2.sensitivity < 1.0) {
-            const lc1 = Math.log10(r1.cpd), lc2 = Math.log10(r2.cpd);
-            const ls1 = Math.log10(r1.sensitivity), ls2 = Math.log10(r2.sensitivity);
-            const t = (0 - ls1) / (ls2 - ls1);
-            crossoverCpd = Math.pow(10, lc1 + t * (lc2 - lc1));
-            break;
+    // Reference overlays
+    activeCSFRefs.forEach(refKey => {
+        const scenario = CSF_SCENARIOS[refKey];
+        if (!scenario) return;
+        const pts = scenario.points;
+        const minCpd = pts[0].cpd, maxCpd = pts[pts.length - 1].cpd;
+        const refPts = [];
+        for (let i = 0; i <= 60; i++) {
+            const cpd = minCpd * Math.pow(maxCpd / minCpd, i / 60);
+            const cs = csfRefInterp(scenario, cpd);
+            refPts.push({ x: toX(cpd), y: toY(cs) });
+            if (cs < 0.8) break;
         }
+        if (refPts.length < 2) return;
+        const isDashed = scenario.confidence === 'approximate';
+        ctx.strokeStyle = scenario.color + 'cc';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash(isDashed ? [4,4] : [3,3]);
+        ctx.beginPath();
+        refPts.forEach((p,i) => i===0 ? ctx.moveTo(p.x,p.y) : ctx.lineTo(p.x,p.y));
+        ctx.stroke();
+        ctx.setLineDash([]);
+        pts.forEach(pt => {
+            if (pt.cs < 0.8) return;
+            ctx.fillStyle = scenario.color;
+            ctx.beginPath(); ctx.arc(toX(pt.cpd), toY(pt.cs), 2, 0, Math.PI*2); ctx.fill();
+        });
+        const labelPt = refPts[Math.round(refPts.length * 0.18)];
+        if (labelPt) {
+            ctx.fillStyle = scenario.color;
+            ctx.font = `9px ${font}`;
+            ctx.textAlign = 'left';
+            ctx.fillText(scenario.label, labelPt.x + 4, labelPt.y - 6);
+        }
+    });
+
+    // Patient spline — truncate at first "can't see" past peak, enforce monotonic decline
+    const allSorted = [...results].sort((a, b) => a.cpd - b.cpd);
+    let peakIdx = 0;
+    for (let i = 1; i < allSorted.length; i++) {
+        if (allSorted[i].sensitivity > allSorted[peakIdx].sensitivity) peakIdx = i;
     }
-    // Extrapolate right: extend to CS=1
-    if (sortedResults.length >= 2) {
-        const last = sortedResults[sortedResults.length - 1];
-        const prev = sortedResults[sortedResults.length - 2];
-        if (last.sensitivity > 1.0) {
-            const logCpd1 = Math.log10(prev.cpd), logCpd2 = Math.log10(last.cpd);
-            const logCs1 = Math.log10(prev.sensitivity), logCs2 = Math.log10(last.sensitivity);
-            const slope = (logCs2 - logCs1) / (logCpd2 - logCpd1);
-            if (slope < 0) {
-                const cpdAtCs1 = Math.pow(10, logCpd2 + (0 - logCs2) / slope);
-                patientPts.push({ x: toX(cpdAtCs1), y: toY(1.0) });
-                if (!crossoverCpd) crossoverCpd = cpdAtCs1;
+    const plotResults = [];
+    for (let i = 0; i <= peakIdx; i++) {
+        if (allSorted[i].threshold < 100) plotResults.push(allSorted[i]);
+    }
+    for (let i = peakIdx + 1; i < allSorted.length; i++) {
+        if (allSorted[i].threshold >= 100) break;
+        plotResults.push(allSorted[i]);
+    }
+    if (plotResults.length >= 3) {
+        let pIdx = 0;
+        for (let i = 1; i < plotResults.length; i++) {
+            if (plotResults[i].sensitivity > plotResults[pIdx].sensitivity) pIdx = i;
+        }
+        for (let i = pIdx + 1; i < plotResults.length; i++) {
+            if (plotResults[i].sensitivity > plotResults[i - 1].sensitivity) {
+                const prev = plotResults[i - 1];
+                const next = (i + 1 < plotResults.length) ? plotResults[i + 1] : null;
+                if (next && next.sensitivity < prev.sensitivity) {
+                    const lc = Math.log10(plotResults[i].cpd);
+                    const lc1 = Math.log10(prev.cpd), lc2 = Math.log10(next.cpd);
+                    const ls1 = Math.log10(prev.sensitivity), ls2 = Math.log10(next.sensitivity);
+                    const t = (lc - lc1) / (lc2 - lc1);
+                    plotResults[i] = { ...plotResults[i], sensitivity: Math.pow(10, ls1 + t * (ls2 - ls1)) };
+                } else {
+                    plotResults[i] = { ...plotResults[i], sensitivity: prev.sensitivity };
+                }
             }
         }
     }
-    // Extrapolate left: extend to y-axis
+    const patientPts = plotResults.map(r => ({ x: toX(r.cpd), y: toY(r.sensitivity) }));
+
+    // Acuity anchor determines where the curve crosses CS=1. Period.
+    const acuityAnchor = results.acuityAnchor || null;
+    const acuityFail = results.acuityFail || null;
+    let crossoverCpd = null;
+
+    if (acuityAnchor && acuityFail) {
+        const anchorCpd = 600 / acuityAnchor;
+        const failCpd = 600 / acuityFail;
+        crossoverCpd = Math.pow(10, (Math.log10(anchorCpd) + Math.log10(failCpd)) / 2);
+    } else if (acuityAnchor && !acuityFail) {
+        crossoverCpd = 600 / acuityAnchor;
+    } else {
+        // Legacy data without acuity anchor — extrapolate
+        if (plotResults.length >= 2) {
+            const last = plotResults[plotResults.length - 1];
+            const prev = plotResults[plotResults.length - 2];
+            if (last.sensitivity > 1.0) {
+                const logCpd1 = Math.log10(prev.cpd), logCpd2 = Math.log10(last.cpd);
+                const logCs1 = Math.log10(prev.sensitivity), logCs2 = Math.log10(last.sensitivity);
+                const slope = (logCs2 - logCs1) / (logCpd2 - logCpd1);
+                if (slope < 0) crossoverCpd = Math.pow(10, logCpd2 + (0 - logCs2) / slope);
+            }
+        }
+    }
+
+    // Force curve to terminate at CS=1 at the crossover
+    if (crossoverCpd) {
+        const crossX = toX(crossoverCpd);
+        while (patientPts.length > 0 && patientPts[patientPts.length - 1].x > crossX + 1) {
+            patientPts.pop();
+        }
+        patientPts.push({ x: crossX, y: toY(1.0) });
+    }
     if (patientPts.length >= 2) {
         const dx = patientPts[1].x - patientPts[0].x;
         const dy = patientPts[1].y - patientPts[0].y;
@@ -641,10 +987,13 @@ function renderCSFGraph(canvas, results) {
     }
     const spline = catmullRomSpline(patientPts, 24);
 
-    // Green/red fill between patient and norm
+    // Green/red fill
+    const bottomY = toY(1.0);
+    const splineEndX = spline.length > 0 ? spline[spline.length - 1].x : ml;
+
     for (let fp = 0; fp < 2; fp++) {
         ctx.save(); ctx.beginPath(); ctx.rect(ml,mt,pw,ph); ctx.clip();
-        ctx.fillStyle = fp===0 ? 'rgba(52,211,153,0.18)' : 'rgba(248,113,113,0.18)';
+        ctx.fillStyle = fp===0 ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)';
         let seg = [];
         const flush = () => {
             if (seg.length < 2) { seg = []; return; }
@@ -662,22 +1011,83 @@ function renderCSFGraph(canvas, results) {
             else { flush(); }
         });
         flush();
+
+        // Red extension past acuity limit: patient at bottom, normative still above
+        if (fp === 1 && crossoverCpd) {
+            const extSeg = [];
+            for (let i = 0; i <= 40; i++) {
+                const x = splineEndX + (ml + pw - splineEndX) * i / 40;
+                if (x > ml + pw) break;
+                const lc = logCpdMin + (x - ml) / pw * (logCpdMax - logCpdMin);
+                const normCS = csfNormative(Math.pow(10, lc));
+                if (normCS <= 0.8) break;
+                const ny = toY(normCS);
+                if (ny < bottomY) extSeg.push({ x, py: bottomY, ny });
+            }
+            if (extSeg.length >= 2) {
+                ctx.beginPath();
+                ctx.moveTo(extSeg[0].x, extSeg[0].ny);
+                extSeg.forEach(pt => ctx.lineTo(pt.x, pt.py));
+                for (let i = extSeg.length - 1; i >= 0; i--) ctx.lineTo(extSeg[i].x, extSeg[i].ny);
+                ctx.closePath(); ctx.fill();
+            }
+        }
+
         ctx.restore();
     }
 
     // Glow + curve
-    ctx.save(); ctx.shadowColor='rgba(96,165,250,0.3)'; ctx.shadowBlur=10;
-    ctx.strokeStyle='rgba(96,165,250,0.12)'; ctx.lineWidth=5; ctx.lineJoin='round';
+    ctx.save(); ctx.shadowColor='rgba(37,99,235,0.25)'; ctx.shadowBlur=8;
+    ctx.strokeStyle='rgba(37,99,235,0.08)'; ctx.lineWidth=6; ctx.lineJoin='round';
     ctx.beginPath(); spline.forEach((p,i)=>i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y)); ctx.stroke(); ctx.restore();
-    ctx.strokeStyle='#60a5fa'; ctx.lineWidth=2.5; ctx.lineJoin='round'; ctx.lineCap='round';
+    ctx.strokeStyle='#2563eb'; ctx.lineWidth=2.5; ctx.lineJoin='round'; ctx.lineCap='round';
     ctx.beginPath(); spline.forEach((p,i)=>i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y)); ctx.stroke();
 
     // "You" label
+    const graphMode = results.lightingMode || 'photopic';
     const peak = patientPts.reduce((b,p)=>p.y<b.y?p:b, patientPts[0]);
-    ctx.fillStyle='#60a5fa'; ctx.font=`bold 9px ${font}`; ctx.textAlign='center';
-    ctx.fillText('You', peak.x, peak.y-10);
+    ctx.fillStyle='#2563eb'; ctx.font=`bold 9px ${font}`; ctx.textAlign='center';
+    const otherMode = graphMode === 'photopic' ? 'mesopic' : 'photopic';
+    const otherResults = csfCompletedResults[otherMode];
+    const modeLabel = otherResults ? (graphMode === 'mesopic' ? 'Mesopic' : 'Photopic') : '';
+    ctx.fillText(modeLabel ? `You (${modeLabel})` : 'You', peak.x, peak.y-10);
 
-    // X labels — standard Snellen at fixed positions
+    // Draw other lighting mode curve if available
+    if (otherResults && otherResults.length > 0) {
+        const otherColor = otherMode === 'mesopic' ? '#818cf8' : '#f59e0b';
+        const otherLabel = otherMode === 'mesopic' ? 'Mesopic' : 'Photopic';
+        const otherSorted = [...otherResults].filter(r => r.threshold < 100).sort((a, b) => a.cpd - b.cpd);
+        if (otherSorted.length >= 2) {
+            const otherPts = otherSorted.map(r => ({ x: toX(r.cpd), y: toY(r.sensitivity) }));
+            const oA = otherResults.acuityAnchor, oF = otherResults.acuityFail;
+            if (oA && oF) {
+                const oCross = Math.pow(10, (Math.log10(600/oA) + Math.log10(600/oF)) / 2);
+                const cx = toX(oCross);
+                while (otherPts.length > 0 && otherPts[otherPts.length-1].x > cx+1) otherPts.pop();
+                otherPts.push({ x: cx, y: toY(1.0) });
+            }
+            if (otherPts.length >= 2) {
+                const oSpline = catmullRomSpline(otherPts, 24);
+                ctx.strokeStyle = otherColor;
+                ctx.lineWidth = 1.5;
+                ctx.setLineDash([6, 4]);
+                ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+                ctx.beginPath();
+                oSpline.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+                ctx.stroke();
+                ctx.setLineDash([]);
+                const oLbl = oSpline[Math.round(oSpline.length * 0.15)];
+                if (oLbl) {
+                    ctx.fillStyle = otherColor;
+                    ctx.font = `bold 8px ${font}`;
+                    ctx.textAlign = 'left';
+                    ctx.fillText(otherLabel, oLbl.x + 4, oLbl.y + 12);
+                }
+            }
+        }
+    }
+
+    // X labels
     const snellenTicks = [
         {denom:100,cpd:6},{denom:50,cpd:12},{denom:40,cpd:15},{denom:30,cpd:20},
         {denom:25,cpd:24},{denom:20,cpd:30},{denom:15,cpd:40},{denom:10,cpd:60}
@@ -685,38 +1095,74 @@ function renderCSFGraph(canvas, results) {
     ctx.textAlign='center';
     ctx.font=`bold 9px ${font}`;
     snellenTicks.forEach(t => {
-        ctx.fillStyle='rgba(255,255,255,0.5)';
+        ctx.fillStyle='rgba(0,0,0,0.55)';
         ctx.fillText(`20/${t.denom}`, toX(t.cpd), mt+ph+15);
     });
-    ctx.font=`8px ${font}`; ctx.fillStyle='rgba(255,255,255,0.25)';
+    ctx.font=`8px ${font}`; ctx.fillStyle='rgba(0,0,0,0.3)';
     snellenTicks.forEach(t => ctx.fillText(`${t.cpd} cpd`, toX(t.cpd), mt+ph+26));
 
     // Crossover marker
     if (crossoverCpd) {
         const denomLabel = Math.round(600/crossoverCpd);
         const cx = toX(crossoverCpd), cy = toY(1.0);
-        ctx.strokeStyle='rgba(96,165,250,0.35)'; ctx.lineWidth=1; ctx.setLineDash([3,3]);
+        ctx.strokeStyle='rgba(37,99,235,0.35)'; ctx.lineWidth=1; ctx.setLineDash([3,3]);
         ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(cx,mt+ph); ctx.stroke(); ctx.setLineDash([]);
-        ctx.fillStyle='#60a5fa'; ctx.beginPath(); ctx.arc(cx,cy,3,0,Math.PI*2); ctx.fill();
-        ctx.font=`bold 11px ${font}`; ctx.fillStyle='#60a5fa'; ctx.textAlign='center';
+        ctx.fillStyle='#2563eb'; ctx.beginPath(); ctx.arc(cx,cy,3,0,Math.PI*2); ctx.fill();
+        ctx.font=`bold 11px ${font}`; ctx.fillStyle='#2563eb'; ctx.textAlign='center';
         ctx.fillText(`20/${denomLabel}`, cx, mt+ph+40);
-        ctx.font=`7px ${font}`; ctx.fillStyle='rgba(96,165,250,0.7)';
+        ctx.font=`7px ${font}`; ctx.fillStyle='rgba(37,99,235,0.7)';
         ctx.fillText('acuity limit', cx, mt+ph+49);
     }
 
-    ctx.fillStyle='rgba(255,255,255,0.3)'; ctx.font=`9px ${font}`; ctx.textAlign='center';
+    ctx.fillStyle='rgba(0,0,0,0.35)'; ctx.font=`9px ${font}`; ctx.textAlign='center';
     ctx.fillText('Spatial Frequency (cpd)', ml+pw/2, mt+ph+60);
 
     // Y labels
     ctx.font=`10px ${font}`; ctx.textAlign='right';
-    [1,2,5,10,20,50,100].forEach(cs => { const y=toY(cs); if(y<mt||y>mt+ph)return; ctx.fillStyle='rgba(255,255,255,0.45)'; ctx.fillText(cs, ml-6, y+4); });
+    [1,2,5,10,20,50,100].forEach(cs => { const y=toY(cs); if(y<mt||y>mt+ph)return; ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillText(cs, ml-6, y+4); });
     ctx.save(); ctx.translate(14, mt+ph/2); ctx.rotate(-Math.PI/2); ctx.textAlign='center';
-    ctx.fillStyle='rgba(255,255,255,0.3)'; ctx.font=`10px ${font}`; ctx.fillText('Contrast Sensitivity', 0, 0); ctx.restore();
-    // Layman labels — separated at top and bottom
+    ctx.fillStyle='rgba(0,0,0,0.3)'; ctx.font=`10px ${font}`; ctx.fillText('Contrast Sensitivity', 0, 0); ctx.restore();
+    // Layman labels
     ctx.save(); ctx.translate(10, mt+ph-20); ctx.rotate(-Math.PI/2); ctx.textAlign='left';
-    ctx.font=`bold 9px ${font}`; ctx.fillStyle='rgba(255,255,255,0.35)'; ctx.fillText('\u2190 Needs bolder', 0, 0); ctx.restore();
+    ctx.font=`bold 9px ${font}`; ctx.fillStyle='rgba(0,0,0,0.3)'; ctx.fillText('\u2190 Needs bolder', 0, 0); ctx.restore();
     ctx.save(); ctx.translate(10, mt+20); ctx.rotate(-Math.PI/2); ctx.textAlign='right';
-    ctx.font=`bold 9px ${font}`; ctx.fillStyle='rgba(255,255,255,0.35)'; ctx.fillText('Can see faint \u2192', 0, 0); ctx.restore();
+    ctx.font=`bold 9px ${font}`; ctx.fillStyle='rgba(0,0,0,0.3)'; ctx.fillText('Can see faint \u2192', 0, 0); ctx.restore();
+
+    // --- Area Under the Curve (AUC) metric ---
+    // Trapezoidal integration in log-cpd × log-CS space.
+    // Normalized so average = 100. Patient score is relative to average.
+    if (plotResults.length >= 2) {
+        let auc = 0;
+        for (let i = 0; i < plotResults.length - 1; i++) {
+            const lc1 = Math.log10(plotResults[i].cpd);
+            const lc2 = Math.log10(plotResults[i + 1].cpd);
+            const ls1 = Math.log10(Math.max(1, plotResults[i].sensitivity));
+            const ls2 = Math.log10(Math.max(1, plotResults[i + 1].sensitivity));
+            auc += (ls1 + ls2) / 2 * (lc2 - lc1);
+        }
+        // Normative AUC over the same cpd range
+        let normAuc = 0;
+        const normSteps = 60;
+        const lMin = Math.log10(plotResults[0].cpd);
+        const lMax = Math.log10(plotResults[plotResults.length - 1].cpd);
+        for (let i = 0; i < normSteps; i++) {
+            const lc1 = lMin + (lMax - lMin) * i / normSteps;
+            const lc2 = lMin + (lMax - lMin) * (i + 1) / normSteps;
+            const ls1 = Math.log10(Math.max(1, csfNormative(Math.pow(10, lc1))));
+            const ls2 = Math.log10(Math.max(1, csfNormative(Math.pow(10, lc2))));
+            normAuc += (ls1 + ls2) / 2 * (lc2 - lc1);
+        }
+        // Normalize: average = 100, patient relative to that
+        const score = normAuc > 0 ? Math.round(auc / normAuc * 100 / 5) * 5 : 0;
+
+        ctx.font = `bold 13px ${font}`;
+        ctx.textAlign = 'right';
+        ctx.fillStyle = score >= 100 ? '#16a34a' : score >= 85 ? '#2563eb' : '#dc2626';
+        ctx.fillText(`CSF Score: ${score}`, ml + pw, mt + 14);
+        ctx.font = `10px ${font}`;
+        ctx.fillStyle = 'rgba(0,0,0,0.35)';
+        ctx.fillText('(avg = 100)', ml + pw, mt + 28);
+    }
 }
 
 // ==========================================
@@ -1072,7 +1518,39 @@ $('#btn-line-refresh').addEventListener('click', () => {
 });
 
 $('#btn-csf-remote').addEventListener('click', () => {
-    channel.postMessage({ type: 'csf-start-remote' });
+    // CSF always starts photopic
+    channel.postMessage({ type: 'csf-start-remote', lightingMode: 'photopic' });
+});
+
+// Run Mesopic — starts a second CSF test in mesopic mode after photopic completes
+$('#btn-run-mesopic').addEventListener('click', () => {
+    channel.postMessage({ type: 'csf-start-remote', lightingMode: 'mesopic' });
+    // Hide the mesopic button and return to test panel
+    $('#btn-run-mesopic').style.display = 'none';
+    resultsPanel.classList.add('hidden');
+    testPanel.classList.remove('hidden');
+});
+
+// Toggle display between photopic (white bg) and mesopic (black bg) on patient screen
+$('#btn-toggle-display').addEventListener('click', () => {
+    const btn = $('#btn-toggle-display');
+    const showingMesopic = btn.dataset.mode === 'mesopic';
+    const newMode = showingMesopic ? 'photopic' : 'mesopic';
+    btn.dataset.mode = newMode;
+    btn.textContent = newMode === 'mesopic' ? 'Switch to Photopic View' : 'Switch to Mesopic View';
+
+    // Update clinician graph
+    const primary = csfCompletedResults[newMode] || lastCompletedResults;
+    if (primary) {
+        primary.lightingMode = newMode;
+        lastCompletedResults = primary;
+        const canvas = $('#csf-graph');
+        if (canvas) renderCSFGraph(canvas, primary);
+    }
+
+    // Tell patient display to switch
+    csfLightingMode = newMode;
+    broadcastRefUpdate();
 });
 
 $('#btn-back-acuity').addEventListener('click', () => {
