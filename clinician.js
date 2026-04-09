@@ -101,11 +101,13 @@ const PatientDB = {
         });
     },
 
-    async saveCSFResult(patientId, results, graphDataURL) {
+    async saveCSFResult(patientId, results, graphDataURL, correctionType, lightingMode) {
         const store = await this._store('csfResults', 'readwrite');
         return new Promise((resolve, reject) => {
             const req = store.add({
-                patientId, date: Date.now(), results, graphDataURL
+                patientId, date: Date.now(), results, graphDataURL,
+                correctionType: correctionType || 'bcva',
+                lightingMode: lightingMode || 'photopic'
             });
             req.onsuccess = () => resolve(req.result);
             req.onerror = (e) => reject(e.target.error);
@@ -220,6 +222,11 @@ function showLine(data) {
         statusBadge.className = 'status-badge waiting';
         statusBadge.style.background = 'linear-gradient(135deg, #10b981, #059669)';
         levelInfo.innerHTML = `<strong>20/${data.snellenDenom}</strong> — Acuity Check (100% contrast, need 3/${data.letters.length} correct)`;
+    } else if (data.peakAnchor) {
+        statusBadge.textContent = `Peak — 20/${data.snellenDenom}`;
+        statusBadge.className = 'status-badge waiting';
+        statusBadge.style.background = 'linear-gradient(135deg, #f59e0b, #d97706)';
+        levelInfo.innerHTML = `<strong>20/${data.snellenDenom}</strong> — Peak Sensitivity (contrast sweep to anchor Y-axis)`;
     } else {
         statusBadge.textContent = `Pass ${data.pass} — 20/${data.snellenDenom}`;
         statusBadge.className = 'status-badge waiting';
@@ -346,7 +353,7 @@ function renderResponseHistory() {
 
     responseHistory.forEach((entry, idx) => {
         const row = document.createElement('div');
-        row.className = 'history-row' + (entry.acuityCheck ? ' history-acuity' : '');
+        row.className = 'history-row' + (entry.acuityCheck ? ' history-acuity' : '') + (entry.peakAnchor ? ' history-peak' : '');
 
         // Size label
         const sizeEl = document.createElement('span');
@@ -358,7 +365,7 @@ function renderResponseHistory() {
         // Pass label
         const passEl = document.createElement('span');
         passEl.className = 'history-pass';
-        passEl.textContent = entry.acuityCheck ? 'AQ' : `P${entry.pass}`;
+        passEl.textContent = entry.acuityCheck ? 'AQ' : entry.peakAnchor ? 'PK' : `P${entry.pass}`;
         row.appendChild(passEl);
 
         // Mark mode indicator
@@ -419,7 +426,8 @@ btnNext.addEventListener('click', () => {
         contrasts: [...currentLine.contrasts],
         errors: [...errors],
         markMode: markMode,
-        acuityCheck: currentLine.acuityCheck || false
+        acuityCheck: currentLine.acuityCheck || false,
+        peakAnchor: currentLine.peakAnchor || false
     });
     renderResponseHistory();
 
@@ -518,6 +526,9 @@ function showResults(results) {
 
     // Wire up reference overlay toggles
     wireRefToggles();
+
+    // Populate history overlay dropdown
+    if (activePatientId) populateHistoryOverlay();
 }
 
 function broadcastRefUpdate() {
@@ -1087,6 +1098,44 @@ function renderCSFGraph(canvas, results) {
         }
     }
 
+    // --- History overlay curve (from dropdown) ---
+    if (historyOverlayResults && historyOverlayResults.length > 0) {
+        const ovrColor = '#f59e0b'; // amber
+        const ovrSorted = [...historyOverlayResults].filter(r => r.threshold < 100).sort((a, b) => a.cpd - b.cpd);
+        if (ovrSorted.length >= 2) {
+            const ovrPts = ovrSorted.map(r => ({ x: toX(r.cpd), y: toY(r.sensitivity) }));
+            const oA = historyOverlayResults.acuityAnchor, oF = historyOverlayResults.acuityFail;
+            if (oA && oF) {
+                const oCross = Math.pow(10, (Math.log10(600/oA) + Math.log10(600/oF)) / 2);
+                const cx = toX(oCross);
+                while (ovrPts.length > 0 && ovrPts[ovrPts.length-1].x > cx+1) ovrPts.pop();
+                ovrPts.push({ x: cx, y: toY(1.0) });
+            }
+            if (ovrPts.length >= 2) {
+                const oSpline = catmullRomSpline(ovrPts, 24);
+                ctx.strokeStyle = ovrColor;
+                ctx.lineWidth = 2;
+                ctx.setLineDash([8, 5]);
+                ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+                ctx.beginPath();
+                oSpline.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+                ctx.stroke();
+                ctx.setLineDash([]);
+                // Label from dropdown text
+                const sel = document.getElementById('history-overlay');
+                const selOpt = sel && sel.selectedOptions[0];
+                const ovrLabel = selOpt && selOpt.value ? selOpt.textContent : 'Previous';
+                const oLbl = oSpline[Math.round(oSpline.length * 0.2)];
+                if (oLbl) {
+                    ctx.fillStyle = ovrColor;
+                    ctx.font = `bold 8px ${font}`;
+                    ctx.textAlign = 'left';
+                    ctx.fillText(ovrLabel, oLbl.x + 4, oLbl.y + 14);
+                }
+            }
+        }
+    }
+
     // X labels
     const snellenTicks = [
         {denom:100,cpd:6},{denom:50,cpd:12},{denom:40,cpd:15},{denom:30,cpd:20},
@@ -1254,7 +1303,12 @@ function selectPatient(patient) {
     `;
 
     refreshHistory();
+    populateHistoryOverlay();
 }
+
+const CORRECTION_LABELS = {
+    bcva: 'BCVA', habitual: 'Habitual', cl: 'CL', unaided: 'Unaided', pinhole: 'Pinhole'
+};
 
 async function refreshHistory() {
     const container = $('#patient-history');
@@ -1276,53 +1330,113 @@ async function refreshHistory() {
         return;
     }
 
+    // Group by date (day)
+    const grouped = {};
     results.forEach(r => {
-        const date = new Date(r.date);
-        const dateStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-        const timeStr = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-        const levels = r.results ? r.results.length : 0;
+        const d = new Date(r.date);
+        const dayKey = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+        if (!grouped[dayKey]) grouped[dayKey] = [];
+        grouped[dayKey].push(r);
+    });
 
-        const item = document.createElement('div');
-        item.className = 'history-item';
-        item.innerHTML = `
-            <div>
-                <div class="history-date">${dateStr} ${timeStr}</div>
-                <div class="history-summary">${levels} levels tested</div>
-            </div>
-            <div class="history-actions">
-                <button class="history-btn" data-action="view" data-id="${r.id}">View</button>
-                <button class="history-btn" data-action="copy" data-id="${r.id}">Copy</button>
-                <button class="history-btn history-btn-del" data-action="delete" data-id="${r.id}">Del</button>
-            </div>
-        `;
+    Object.entries(grouped).forEach(([dayKey, dayResults]) => {
+        const dateHeader = document.createElement('div');
+        dateHeader.style.cssText = 'font-size:0.72rem;font-weight:700;color:rgba(255,255,255,0.5);margin:8px 0 2px;padding:0 2px;';
+        dateHeader.textContent = dayKey;
+        container.appendChild(dateHeader);
 
-        // View: render saved graph
-        item.querySelector('[data-action="view"]').addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (r.results) {
-                showResults(r.results);
-            } else if (r.graphDataURL) {
-                showToast('Graph-only record (legacy)');
-            }
+        dayResults.forEach(r => {
+            const date = new Date(r.date);
+            const timeStr = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+            const corrLabel = CORRECTION_LABELS[r.correctionType] || r.correctionType || 'BCVA';
+            const modeLabel = r.lightingMode === 'mesopic' ? 'Meso' : 'Photo';
+            const levels = r.results ? r.results.length : 0;
+
+            const item = document.createElement('div');
+            item.className = 'history-item';
+            item.innerHTML = `
+                <div style="flex:1">
+                    <div class="history-date">${timeStr} — <strong>${corrLabel}</strong> <span style="color:${r.lightingMode === 'mesopic' ? '#818cf8' : '#60a5fa'}">${modeLabel}</span></div>
+                    <div class="history-summary">${levels} levels</div>
+                </div>
+                <div class="history-actions">
+                    <button class="history-btn" data-action="view">View</button>
+                    <button class="history-btn" data-action="copy">Copy</button>
+                    <button class="history-btn history-btn-del" data-action="delete">Del</button>
+                </div>
+            `;
+
+            item.querySelector('[data-action="view"]').addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (r.results) showResults(r.results);
+            });
+
+            item.querySelector('[data-action="copy"]').addEventListener('click', (e) => {
+                e.stopPropagation();
+                copyResultsToClipboard(r.results, activePatient, new Date(r.date));
+            });
+
+            item.querySelector('[data-action="delete"]').addEventListener('click', async (e) => {
+                e.stopPropagation();
+                await PatientDB.deleteResult(r.id);
+                refreshHistory();
+                populateHistoryOverlay();
+                showToast('Result deleted');
+            });
+
+            container.appendChild(item);
         });
-
-        // Copy
-        item.querySelector('[data-action="copy"]').addEventListener('click', (e) => {
-            e.stopPropagation();
-            copyResultsToClipboard(r.results, activePatient, new Date(r.date));
-        });
-
-        // Delete
-        item.querySelector('[data-action="delete"]').addEventListener('click', async (e) => {
-            e.stopPropagation();
-            await PatientDB.deleteResult(r.id);
-            refreshHistory();
-            showToast('Result deleted');
-        });
-
-        container.appendChild(item);
     });
 }
+
+// Track overlay curve from history
+let historyOverlayResults = null;
+
+async function populateHistoryOverlay() {
+    const sel = $('#history-overlay');
+    if (!sel) return;
+    sel.innerHTML = '<option value="">Overlay previous test...</option>';
+    historyOverlayResults = null;
+
+    if (!activePatientId) return;
+    let results;
+    try { results = await PatientDB.getPatientResults(activePatientId); } catch (e) { return; }
+
+    results.forEach(r => {
+        const d = new Date(r.date);
+        const dateStr = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+        const timeStr = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+        const corrLabel = CORRECTION_LABELS[r.correctionType] || 'BCVA';
+        const modeLabel = r.lightingMode === 'mesopic' ? 'Meso' : 'Photo';
+        const opt = document.createElement('option');
+        opt.value = r.id;
+        opt.textContent = `${dateStr} ${timeStr} — ${corrLabel} ${modeLabel}`;
+        opt.dataset.json = JSON.stringify(r.results);
+        // Preserve acuity data
+        if (r.results && r.results.acuityAnchor != null) opt.dataset.acuityAnchor = r.results.acuityAnchor;
+        if (r.results && r.results.acuityFail != null) opt.dataset.acuityFail = r.results.acuityFail;
+        sel.appendChild(opt);
+    });
+}
+
+// Wire up overlay dropdown
+$('#history-overlay').addEventListener('change', function() {
+    const opt = this.selectedOptions[0];
+    if (!opt || !opt.value) {
+        historyOverlayResults = null;
+    } else {
+        try {
+            historyOverlayResults = JSON.parse(opt.dataset.json);
+            if (opt.dataset.acuityAnchor) historyOverlayResults.acuityAnchor = Number(opt.dataset.acuityAnchor);
+            if (opt.dataset.acuityFail) historyOverlayResults.acuityFail = Number(opt.dataset.acuityFail);
+        } catch (e) { historyOverlayResults = null; }
+    }
+    // Re-render graph with overlay
+    if (lastCompletedResults) {
+        const canvas = $('#csf-graph');
+        if (canvas) renderCSFGraph(canvas, lastCompletedResults);
+    }
+});
 
 async function saveCurrentResults() {
     if (!lastCompletedResults) {
@@ -1341,11 +1455,15 @@ async function saveCurrentResults() {
     let graphDataURL = '';
     try { graphDataURL = canvas.toDataURL('image/png'); } catch (e) { /* ok */ }
 
+    const correctionType = ($('#correction-type') || {}).value || 'bcva';
+    const lightingMode = lastCompletedResults.lightingMode || 'photopic';
+
     try {
-        await PatientDB.saveCSFResult(activePatientId, lastCompletedResults, graphDataURL);
+        await PatientDB.saveCSFResult(activePatientId, lastCompletedResults, graphDataURL, correctionType, lightingMode);
         showToast(`Saved to ${activePatient.name}`);
         $('#btn-save-results').disabled = true;
         refreshHistory();
+        populateHistoryOverlay();
     } catch (err) {
         console.error('Save failed:', err);
         showToast(`Save failed: ${err.message || err}`);

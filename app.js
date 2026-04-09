@@ -613,6 +613,8 @@ const csfState = {
     acuityIndex: 0,
     acuityAnchor: null,   // last passing denom (patient CAN see at 100%)
     acuityFail: null,     // first failing denom (patient CANNOT see at 100%)
+    // Peak anchor phase: single 20/100 contrast sweep to peg Y-axis
+    peakAnchorPhase: false,
     lightingMode: 'photopic' // 'photopic' or 'mesopic'
 };
 
@@ -644,6 +646,52 @@ document.addEventListener('DOMContentLoaded', () => {
     // Always start at welcome screen
     showScreen('welcome');
 });
+
+// Reset all test state to defaults — call before starting a new patient
+function resetTestState() {
+    // Distance tab
+    distanceSnellenIndex = 4;
+    distanceLetters = [];
+    baileyLovieMode = false;
+    blLogmarIndex = 7;
+    blLetters = [];
+    contrastPercent = 100;
+
+    // CSF state
+    csfState.active = false;
+    csfState.pass = 1;
+    csfState.levelIndex = 0;
+    csfState.levels = [];
+    csfState.currentLetters = [];
+    csfState.currentContrasts = [];
+    csfState.results = {};
+    csfState.waitingForClinician = false;
+    csfState.consecutiveFloors = 0;
+    csfState.newLevels = null;
+    csfState.acuityPhase = false;
+    csfState.acuityIndex = 0;
+    csfState.acuityAnchor = null;
+    csfState.acuityFail = null;
+    csfState.peakAnchorPhase = false;
+    csfState.lightingMode = 'photopic';
+    // Don't close the broadcast channel — it's persistent
+    csfState.channel = null;
+    csfState.clinicianWindow = null;
+
+    // Completed CSF results
+    csfCompletedResults.photopic = null;
+    csfCompletedResults.mesopic = null;
+
+    // Clear mesopic test class
+    const testScreen = $('#test-screen');
+    if (testScreen) testScreen.classList.remove('mesopic-test');
+
+    // Hide CSF results overlay if showing
+    csfClosePatientResults();
+
+    // Sync contrast slider UI with reset value
+    if ($('#contrast-slider')) updateContrastSlider();
+}
 
 function showScreen(name) {
     $$('.screen').forEach(s => s.classList.add('hidden'));
@@ -745,7 +793,7 @@ function setupDistanceCalScreen() {
         state.cssPixelsPerMm = pxPerMm;
 
         // Set testing distance from input
-        const distVal = parseFloat($('#dist-cal-distance').value) || 20;
+        const distVal = parseFloat($('#dist-cal-distance').value) || 25;
         const distUnit = $('#dist-cal-dist-unit').value;
 
         // Show test screen in clean mode (no toolbars, just hallway bg + letters)
@@ -970,9 +1018,10 @@ function setupInputScreen() {
 
     [scaling, occupation].forEach(el => el.addEventListener('change', updateConfigSummary));
 
-    // Form submit
+    // Form submit — reset test state to ensure clean slate for every patient
     $('#patient-form').addEventListener('submit', (e) => {
         e.preventDefault();
+        resetTestState();
         readFormValues();
         showScreen('test');
         renderTest();
@@ -1361,9 +1410,15 @@ function setupTestScreen() {
     // --- CSF Test ---
     $('#csf-start-btn').addEventListener('click', () => csfStartTest());
     $('#csf-stop-btn').addEventListener('click', () => csfStopTest());
-    $('#csf-results-close').addEventListener('click', () => csfClosePatientResults());
-    $('#csf-results-overlay').addEventListener('click', (e) => {
-        if (e.target === $('#csf-results-overlay')) csfClosePatientResults();
+    // CSF results: Retest same patient (keep config, reset test state)
+    $('#csf-retest-btn').addEventListener('click', () => {
+        resetTestState();
+        renderDistanceTest();
+    });
+    // CSF results: New patient (reset everything, go back to input)
+    $('#csf-new-patient-btn').addEventListener('click', () => {
+        resetTestState();
+        showScreen('input');
     });
 
     // --- Luminance calibration ---
@@ -1383,8 +1438,11 @@ function setupTestScreen() {
         }
     });
 
-    // Back button
-    $('#back-btn').addEventListener('click', () => showScreen('input'));
+    // Back button — always reset test state to prevent data leakage
+    $('#back-btn').addEventListener('click', () => {
+        resetTestState();
+        showScreen('input');
+    });
 }
 
 function renderTest() {
@@ -1936,6 +1994,9 @@ function renderDistanceTest() {
         if (csfState.acuityPhase) {
             effectiveDenom = CSF_ACUITY_LEVELS[csfState.acuityIndex];
             indicatorText = `Acuity Check — 20/${effectiveDenom}`;
+        } else if (csfState.peakAnchorPhase) {
+            effectiveDenom = CSF_PEAK_ANCHOR_DENOM;
+            indicatorText = `Peak Sensitivity — 20/${effectiveDenom}`;
         } else {
             effectiveDenom = csfState.levels[csfState.levelIndex] || csfState.levels[csfState.levels.length - 1];
             indicatorText = `CSF Pass ${csfState.pass} — 20/${effectiveDenom}`;
@@ -2268,6 +2329,7 @@ function csfStartTest(lightingMode) {
     csfState.acuityIndex = 0;
     csfState.acuityAnchor = null;
     csfState.acuityFail = null;
+    csfState.peakAnchorPhase = false;
     csfState.lightingMode = lightingMode || 'photopic';
 
     // Apply mesopic visual mode — black background, no hallway image
@@ -2390,6 +2452,35 @@ function csfAcuityNextLine() {
     });
 }
 
+// Peak anchor: one contrast sweep at 20/100 to establish the Y-axis ceiling.
+// Uses the same letter count and contrast range as a pass 1 line.
+const CSF_PEAK_ANCHOR_DENOM = 100;
+
+function csfPeakAnchorLine() {
+    const denom = CSF_PEAK_ANCHOR_DENOM;
+    csfState.currentLetters = csfPickLetters(CSF_LETTERS_PASS1);
+    csfState.currentContrasts = csfComputeContrasts(100, CSF_MIN_CONTRAST, CSF_LETTERS_PASS1);
+    csfState.waitingForClinician = true;
+
+    renderDistanceTest();
+
+    const indicator = $('#snellen-indicator');
+    if (indicator) {
+        indicator.textContent = `Peak Sensitivity — 20/${denom}`;
+        indicator.style.background = 'linear-gradient(135deg, #f59e0b, #d97706)';
+    }
+
+    csfBroadcast('csf-line', {
+        snellenDenom: denom,
+        letters: csfState.currentLetters,
+        contrasts: csfState.currentContrasts,
+        pass: 0,
+        levelIndex: 0,
+        totalLevels: 1,
+        peakAnchor: true
+    });
+}
+
 function csfNextLine() {
     const denom = csfState.levels[csfState.levelIndex];
     const startContrast = csfAdaptiveStart(csfState.levelIndex);
@@ -2458,16 +2549,38 @@ function csfProcessResponse(errors) {
             csfState.acuityFail = denom;
         }
 
-        // Acuity check done — now start pass 1 contrast sweep.
-        // Only test sizes the patient can actually see (at or above acuity anchor).
-        // The acuity anchor size itself is excluded since it was barely visible
-        // at 100% — any lower contrast would be invisible.
+        // Acuity check done — now run a 20/100 peak anchor sweep to peg the
+        // Y-axis (peak sensitivity) before starting pass 1. Large letters are
+        // easy to see, so this gives a reliable ceiling for the CSF curve.
         csfState.acuityPhase = false;
+        csfState.peakAnchorPhase = true;
+        csfPeakAnchorLine();
+        return;
+    }
+
+    // --- Peak anchor phase: 20/100 contrast sweep to peg Y-axis ---
+    if (csfState.peakAnchorPhase) {
+        const denom = CSF_PEAK_ANCHOR_DENOM;
+        const threshold = csfEstimateThreshold(csfState.currentContrasts, errors);
+        const allWrong = errors.every(e => e === 1);
+        csfState.waitingForClinician = false;
+
+        // Store as coarse result for 20/100 — pass 1 will skip this level
+        csfState.results[denom] = {
+            coarseThreshold: threshold,
+            allWrong,
+            errors: [...errors],
+            contrasts: [...csfState.currentContrasts],
+            letters: [...csfState.currentLetters]
+        };
+
+        // Done — transition to pass 1
+        csfState.peakAnchorPhase = false;
         csfState.pass = 1;
         const acuityLimitDenom = csfState.acuityFail || 0;
         csfState.levels = CSF_ALL_LEVELS.filter(d => d > acuityLimitDenom);
-        // If acuityAnchor passed but acuityFail is the next size, don't include
-        // the anchor in contrast testing — it was 100% only
+        // Skip 20/100 in pass 1 — we already have reliable data from the peak anchor
+        csfState.levels = csfState.levels.filter(d => d !== CSF_PEAK_ANCHOR_DENOM);
         if (csfState.acuityAnchor && csfState.levels.includes(csfState.acuityAnchor)) {
             // Keep it — the sweep will test contrast threshold at this size
         }

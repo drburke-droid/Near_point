@@ -1987,13 +1987,35 @@ h3 {
     color: #4f46e5;
 }
 
-.csf-results-content .luminance-modal-close {
-    color: rgba(0, 0, 0, 0.4);
+/* CSF Results Action Buttons */
+.csf-results-actions {
+    display: flex;
+    justify-content: center;
+    gap: 1.5rem;
+    padding: 1.5rem 0 0.5rem;
+    flex-shrink: 0;
 }
 
-.csf-results-content .luminance-modal-close:hover {
-    color: rgba(0, 0, 0, 0.8);
-    background: rgba(0, 0, 0, 0.06);
+.btn-results-action {
+    font-size: 1.25rem;
+    padding: 0.75rem 2rem;
+    border-radius: 10px;
+    font-weight: 600;
+    min-width: 200px;
+}
+
+.csf-results-overlay.mesopic-results .btn-results-action.btn-ghost {
+    color: rgba(255, 255, 255, 0.7);
+    border-color: rgba(255, 255, 255, 0.3);
+}
+
+.csf-results-overlay.mesopic-results .btn-results-action.btn-ghost:hover {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.csf-results-overlay.mesopic-results .btn-results-action.btn-primary {
+    background: linear-gradient(135deg, #6366f1, #4f46e5);
 }
 
 /* ==========================================

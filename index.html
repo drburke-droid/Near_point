@@ -196,7 +196,7 @@
                 <div class="dist-cal-distance-row">
                     <label for="dist-cal-distance">Testing Distance</label>
                     <div class="input-with-unit">
-                        <input type="number" id="dist-cal-distance" value="20" min="1" step="0.5">
+                        <input type="number" id="dist-cal-distance" value="25" min="1" step="0.5">
                         <select id="dist-cal-dist-unit">
                             <option value="ft" selected>ft</option>
                             <option value="m">m</option>
@@ -401,8 +401,8 @@
         <div id="distance-tab" class="tab-content hidden">
             <div class="distance-test-bar">
                 <label for="distance-test-slider">Testing Distance</label>
-                <input type="range" id="distance-test-slider" min="5" max="40" value="20" step="0.5">
-                <span id="distance-test-value">20.0</span>
+                <input type="range" id="distance-test-slider" min="5" max="40" value="25" step="0.5">
+                <span id="distance-test-value">25.0</span>
                 <span class="unit-toggle unit-toggle-dark" id="distance-test-unit" data-unit="ft">ft</span>
                 <label class="mirror-toggle-label">
                     <input type="checkbox" id="mirror-checkbox">
@@ -480,9 +480,12 @@
         <!-- CSF Results Overlay -->
         <div id="csf-results-overlay" class="csf-results-overlay hidden">
             <div class="csf-results-content">
-                <button id="csf-results-close" class="luminance-modal-close">&times;</button>
                 <h2>Your Contrast Sensitivity</h2>
                 <canvas id="csf-patient-canvas" class="csf-graph-canvas"></canvas>
+                <div class="csf-results-actions">
+                    <button id="csf-retest-btn" class="btn btn-ghost btn-results-action">Retest Patient</button>
+                    <button id="csf-new-patient-btn" class="btn btn-primary btn-results-action">Test New Patient</button>
+                </div>
             </div>
         </div>
 
