@@ -204,7 +204,7 @@ channel.onmessage = (e) => {
 function showLine(data) {
     currentLine = data;
     // Clear history at the start of a new test
-    if (data.pass === 1 && data.levelIndex === 0 && !data.acuityCheck) {
+    if (data.pass === 1 && data.levelIndex === 0 && !data.acuityCheck && !data.adaptivePhase) {
         responseHistory = [];
         const hc = $('#response-history');
         if (hc) hc.innerHTML = '';
@@ -227,6 +227,18 @@ function showLine(data) {
         statusBadge.className = 'status-badge waiting';
         statusBadge.style.background = 'linear-gradient(135deg, #f59e0b, #d97706)';
         levelInfo.innerHTML = `<strong>20/${data.snellenDenom}</strong> — Peak Sensitivity (contrast sweep to anchor Y-axis)`;
+    } else if (data.adaptivePhase) {
+        const labels = ['Knee', 'Confirm', 'Retest'];
+        const label = labels[Math.min(data.adaptiveStep, 2)];
+        statusBadge.textContent = `Adaptive ${label} — 20/${data.snellenDenom}`;
+        statusBadge.className = 'status-badge waiting';
+        statusBadge.style.background = 'linear-gradient(135deg, #3b82f6, #1d4ed8)';
+        const desc = data.adaptiveStep === 0
+            ? 'Paired contrast sweep at curve inflection point'
+            : data.adaptiveStep === 1
+            ? 'Paired contrast sweep to confirm curve shape'
+            : 'Retesting suspect measurement';
+        levelInfo.innerHTML = `<strong>20/${data.snellenDenom}</strong> — ${desc}`;
     } else {
         statusBadge.textContent = `Pass ${data.pass} — 20/${data.snellenDenom}`;
         statusBadge.className = 'status-badge waiting';
@@ -353,7 +365,7 @@ function renderResponseHistory() {
 
     responseHistory.forEach((entry, idx) => {
         const row = document.createElement('div');
-        row.className = 'history-row' + (entry.acuityCheck ? ' history-acuity' : '') + (entry.peakAnchor ? ' history-peak' : '');
+        row.className = 'history-row' + (entry.acuityCheck ? ' history-acuity' : '') + (entry.peakAnchor ? ' history-peak' : '') + (entry.adaptivePhase ? ' history-adaptive' : '');
 
         // Size label
         const sizeEl = document.createElement('span');
@@ -365,7 +377,7 @@ function renderResponseHistory() {
         // Pass label
         const passEl = document.createElement('span');
         passEl.className = 'history-pass';
-        passEl.textContent = entry.acuityCheck ? 'AQ' : entry.peakAnchor ? 'PK' : `P${entry.pass}`;
+        passEl.textContent = entry.acuityCheck ? 'AQ' : entry.peakAnchor ? 'PK' : entry.adaptivePhase ? ['KN', 'CF', 'RT'][Math.min(entry.adaptiveStep, 2)] : `P${entry.pass}`;
         row.appendChild(passEl);
 
         // Mark mode indicator
@@ -427,7 +439,9 @@ btnNext.addEventListener('click', () => {
         errors: [...errors],
         markMode: markMode,
         acuityCheck: currentLine.acuityCheck || false,
-        peakAnchor: currentLine.peakAnchor || false
+        peakAnchor: currentLine.peakAnchor || false,
+        adaptivePhase: currentLine.adaptivePhase || false,
+        adaptiveStep: currentLine.adaptiveStep
     });
     renderResponseHistory();
 
@@ -1640,13 +1654,59 @@ $('#btn-csf-remote').addEventListener('click', () => {
     channel.postMessage({ type: 'csf-start-remote', lightingMode: 'photopic' });
 });
 
-// Run Mesopic — starts a second CSF test in mesopic mode after photopic completes
+// --- Save prompt system ---
+// Pending action to execute after save/discard decision
+let pendingSaveAction = null;
+
+function showSavePrompt(title, onComplete) {
+    // If results are already saved (button disabled), skip the prompt
+    if ($('#btn-save-results').disabled || !lastCompletedResults) {
+        onComplete();
+        return;
+    }
+    pendingSaveAction = onComplete;
+    $('#save-prompt-title').textContent = title || 'Save results before continuing?';
+    $('#save-prompt').classList.remove('hidden');
+    $('#save-prompt-backdrop').classList.remove('hidden');
+}
+
+function hideSavePrompt() {
+    $('#save-prompt').classList.add('hidden');
+    $('#save-prompt-backdrop').classList.add('hidden');
+    pendingSaveAction = null;
+}
+
+$('#save-prompt-save').addEventListener('click', async () => {
+    await saveCurrentResults();
+    const action = pendingSaveAction;
+    hideSavePrompt();
+    if (action) action();
+});
+
+$('#save-prompt-discard').addEventListener('click', () => {
+    const action = pendingSaveAction;
+    hideSavePrompt();
+    if (action) action();
+});
+
+$('#save-prompt-cancel').addEventListener('click', () => {
+    hideSavePrompt();
+});
+
+$('#save-prompt-backdrop').addEventListener('click', () => {
+    hideSavePrompt();
+});
+
+// --- Post-test action buttons ---
+
+// Run Mesopic — prompt to save photopic first, then start mesopic test
 $('#btn-run-mesopic').addEventListener('click', () => {
-    channel.postMessage({ type: 'csf-start-remote', lightingMode: 'mesopic' });
-    // Hide the mesopic button and return to test panel
-    $('#btn-run-mesopic').style.display = 'none';
-    resultsPanel.classList.add('hidden');
-    testPanel.classList.remove('hidden');
+    showSavePrompt('Save photopic results before running mesopic test?', () => {
+        channel.postMessage({ type: 'csf-start-remote', lightingMode: 'mesopic' });
+        $('#btn-run-mesopic').style.display = 'none';
+        resultsPanel.classList.add('hidden');
+        testPanel.classList.remove('hidden');
+    });
 });
 
 // Toggle display between photopic (white bg) and mesopic (black bg) on patient screen
@@ -1671,7 +1731,24 @@ $('#btn-toggle-display').addEventListener('click', () => {
     broadcastRefUpdate();
 });
 
-$('#btn-back-acuity').addEventListener('click', () => {
-    channel.postMessage({ type: 'csf-abort' });
-    returnToLineControls();
+// Retest Patient — prompt to save, then clear patient display and return to targets
+$('#btn-retest-patient').addEventListener('click', () => {
+    showSavePrompt('Save results before retesting?', () => {
+        channel.postMessage({ type: 'csf-retest' });
+        lastCompletedResults = null;
+        csfCompletedResults.photopic = null;
+        csfCompletedResults.mesopic = null;
+        returnToLineControls();
+    });
+});
+
+// Test New Patient — prompt to save, then clear everything on patient display
+$('#btn-new-patient').addEventListener('click', () => {
+    showSavePrompt('Save results before switching to a new patient?', () => {
+        channel.postMessage({ type: 'csf-new-patient' });
+        lastCompletedResults = null;
+        csfCompletedResults.photopic = null;
+        csfCompletedResults.mesopic = null;
+        returnToLineControls();
+    });
 });

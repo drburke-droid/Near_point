@@ -595,6 +595,12 @@ const CSF_ACUITY_LEVELS = [20, 15, 12, 10]; // progressive acuity check denoms
 const CSF_ACUITY_LETTERS = 6;              // letters per acuity line
 const CSF_ACUITY_PASS = 3;                 // minimum correct to pass
 
+// Adaptive CSF: paired-letter counts per phase
+const CSF_ADAPTIVE_KNEE_PAIRS = 6;     // 12 letters — most critical measurement
+const CSF_ADAPTIVE_CONFIRM_PAIRS = 5;  // 10 letters — refinement
+const CSF_ADAPTIVE_RETEST_PAIRS = 5;   // 10 letters — validation retest
+const CSF_ADAPTIVE_MAX_RETESTS = 2;    // cap validation retests
+
 const csfState = {
     active: false,
     pass: 1,            // 1 = coarse, 2 = refined
@@ -615,6 +621,12 @@ const csfState = {
     acuityFail: null,     // first failing denom (patient CANNOT see at 100%)
     // Peak anchor phase: single 20/100 contrast sweep to peg Y-axis
     peakAnchorPhase: false,
+    // Adaptive phase: Bayesian 2-point curve fitting
+    adaptivePhase: false,
+    adaptiveStep: 0,       // 0 = knee, 1 = confirm, 2+ = validation retest
+    adaptiveBeta: null,    // fitted curve shape parameter
+    adaptiveDenom: null,   // denom currently being tested
+    adaptiveRetests: 0,    // count of validation retests performed
     lightingMode: 'photopic' // 'photopic' or 'mesopic'
 };
 
@@ -673,6 +685,11 @@ function resetTestState() {
     csfState.acuityAnchor = null;
     csfState.acuityFail = null;
     csfState.peakAnchorPhase = false;
+    csfState.adaptivePhase = false;
+    csfState.adaptiveStep = 0;
+    csfState.adaptiveBeta = null;
+    csfState.adaptiveDenom = null;
+    csfState.adaptiveRetests = 0;
     csfState.lightingMode = 'photopic';
     // Don't close the broadcast channel — it's persistent
     csfState.channel = null;
@@ -847,7 +864,10 @@ function setupDistanceChannel() {
                 if (!csfState.active) $('#snellen-refresh-btn').click();
                 break;
             case 'csf-start-remote':
-                if (!csfState.active) csfStartTest(data.lightingMode || 'photopic');
+                if (!csfState.active) {
+                    csfClosePatientResults();
+                    csfStartTest(data.lightingMode || 'photopic');
+                }
                 break;
             default:
                 // Forward CSF messages to the CSF handler
@@ -1410,16 +1430,8 @@ function setupTestScreen() {
     // --- CSF Test ---
     $('#csf-start-btn').addEventListener('click', () => csfStartTest());
     $('#csf-stop-btn').addEventListener('click', () => csfStopTest());
-    // CSF results: Retest same patient (keep config, reset test state)
-    $('#csf-retest-btn').addEventListener('click', () => {
-        resetTestState();
-        renderDistanceTest();
-    });
-    // CSF results: New patient (reset everything, go back to input)
-    $('#csf-new-patient-btn').addEventListener('click', () => {
-        resetTestState();
-        showScreen('input');
-    });
+    // CSF results overlay — clinician controls all transitions via broadcast
+    // Patient display just dismisses the overlay when clinician sends a command
 
     // --- Luminance calibration ---
     initLuminanceCalibration();
@@ -1997,6 +2009,11 @@ function renderDistanceTest() {
         } else if (csfState.peakAnchorPhase) {
             effectiveDenom = CSF_PEAK_ANCHOR_DENOM;
             indicatorText = `Peak Sensitivity — 20/${effectiveDenom}`;
+        } else if (csfState.adaptivePhase) {
+            effectiveDenom = csfState.adaptiveDenom || CSF_PEAK_ANCHOR_DENOM;
+            const labels = ['Knee', 'Confirm', 'Retest'];
+            const label = labels[Math.min(csfState.adaptiveStep, 2)];
+            indicatorText = `Adaptive ${label} — 20/${effectiveDenom}`;
         } else {
             effectiveDenom = csfState.levels[csfState.levelIndex] || csfState.levels[csfState.levels.length - 1];
             indicatorText = `CSF Pass ${csfState.pass} — 20/${effectiveDenom}`;
@@ -2330,6 +2347,11 @@ function csfStartTest(lightingMode) {
     csfState.acuityAnchor = null;
     csfState.acuityFail = null;
     csfState.peakAnchorPhase = false;
+    csfState.adaptivePhase = false;
+    csfState.adaptiveStep = 0;
+    csfState.adaptiveBeta = null;
+    csfState.adaptiveDenom = null;
+    csfState.adaptiveRetests = 0;
     csfState.lightingMode = lightingMode || 'photopic';
 
     // Apply mesopic visual mode — black background, no hallway image
@@ -2481,6 +2503,224 @@ function csfPeakAnchorLine() {
     });
 }
 
+// ==========================================
+// ADAPTIVE CSF — Bayesian 2-point curve fit
+// ==========================================
+// Parametric model: in log-space, CS declines from CS_peak to CS=1
+// as a power curve controlled by β.
+//   logCS(cpd) = logCS_peak × (1 − t^β)  where t = (logCpd − logCpdPeak) / (logCpdCut − logCpdPeak)
+// β > 1 → long plateau, sharp cutoff (typical young adult)
+// β < 1 → gradual early decline (typical older patient or pathology)
+// β = 1 → linear decline in log-log space
+
+function csfModelPredict(cpd, cpdPeak, cpdCut, csPeak, beta) {
+    if (cpd <= cpdPeak) return csPeak;
+    if (cpd >= cpdCut) return 1.0;
+    const t = (Math.log10(cpd) - Math.log10(cpdPeak)) / (Math.log10(cpdCut) - Math.log10(cpdPeak));
+    return Math.pow(10, Math.log10(csPeak) * (1 - Math.pow(t, beta)));
+}
+
+// Solve for β given one measured point on the curve
+function csfFitBeta(cpdPeak, cpdCut, csPeak, cpdMeas, csMeas) {
+    const logCsPeak = Math.log10(Math.max(1.01, csPeak));
+    const logCsMeas = Math.log10(Math.max(1.01, csMeas));
+    const t = (Math.log10(cpdMeas) - Math.log10(cpdPeak)) / (Math.log10(cpdCut) - Math.log10(cpdPeak));
+    if (t <= 0 || t >= 1) return 2.0; // fallback
+    const ratio = 1 - logCsMeas / logCsPeak;
+    if (ratio <= 0.01) return 5.0;  // CS barely dropped → very sharp cutoff
+    if (ratio >= 0.99) return 0.3;  // CS collapsed early → very gradual
+    return Math.max(0.3, Math.min(5.0, Math.log(ratio) / Math.log(t)));
+}
+
+// Find the cpd where β uncertainty causes maximum divergence in predicted CS.
+// This is the optimal next test point for maximum information gain.
+function csfFindOptimalPoint(cpdPeak, cpdCut, csPeak, beta) {
+    const betaLow = beta * 0.65;
+    const betaHigh = beta * 1.5;
+    let bestCpd = null, bestDiv = 0;
+    const logP = Math.log10(cpdPeak), logC = Math.log10(cpdCut);
+    for (let i = 1; i < 50; i++) {
+        const t = i / 50;
+        const cpd = Math.pow(10, logP + t * (logC - logP));
+        const csLow = csfModelPredict(cpd, cpdPeak, cpdCut, csPeak, betaLow);
+        const csHigh = csfModelPredict(cpd, cpdPeak, cpdCut, csPeak, betaHigh);
+        const div = Math.abs(Math.log10(Math.max(1, csHigh)) - Math.log10(Math.max(1, csLow)));
+        if (div > bestDiv) { bestDiv = div; bestCpd = cpd; }
+    }
+    return bestCpd || Math.pow(10, (logP + logC) / 2);
+}
+
+// Snap a cpd value to the nearest testable Snellen denominator
+function csfCpdToDenom(cpd) {
+    const idealDenom = 600 / cpd;
+    const candidates = [100, 90, 80, 70, 60, 50, 45, 40, 35, 30, 25, 20, 15, 12, 10];
+    let best = candidates[0], bestDist = Infinity;
+    for (const d of candidates) {
+        const dist = Math.abs(Math.log10(d) - Math.log10(idealDenom));
+        if (dist < bestDist) { bestDist = dist; best = d; }
+    }
+    return best;
+}
+
+// Get cutoff cpd from acuity anchors (midpoint in log-space between pass and fail)
+function csfAdaptiveCutoffCpd() {
+    const anchor = csfState.acuityAnchor;
+    const fail = csfState.acuityFail;
+    if (anchor && fail) {
+        return Math.pow(10, (Math.log10(600 / anchor) + Math.log10(600 / fail)) / 2);
+    }
+    if (anchor) return 600 / anchor;
+    return 30; // fallback ≈ 20/20
+}
+
+// Get peak CS from the peak anchor result
+function csfAdaptivePeakCS() {
+    const r = csfState.results[CSF_PEAK_ANCHOR_DENOM];
+    if (!r || !r.coarseThreshold || r.allWrong) return 20; // conservative fallback
+    return 100 / r.coarseThreshold;
+}
+
+// Generate and display the next adaptive test line
+function csfAdaptiveNextLine() {
+    const cpdPeak = 600 / CSF_PEAK_ANCHOR_DENOM; // 6 cpd
+    const cpdCut = csfAdaptiveCutoffCpd();
+    const csPeak = csfAdaptivePeakCS();
+    let testDenom, predictedThreshold, numPairs, stepLabel;
+
+    if (csfState.adaptiveStep === 0) {
+        // KNEE: geometric midpoint — where the curve bends
+        const kneeCpd = Math.pow(10, (Math.log10(cpdPeak) + Math.log10(cpdCut)) / 2);
+        testDenom = csfCpdToDenom(kneeCpd);
+        // Predict threshold from geometric mean of peak sensitivity and 1
+        const predictedCS = Math.sqrt(csPeak);
+        predictedThreshold = 100 / predictedCS;
+        numPairs = CSF_ADAPTIVE_KNEE_PAIRS;
+        stepLabel = 'Knee';
+    } else if (csfState.adaptiveStep === 1) {
+        // CONFIRM: where β uncertainty is largest
+        const optCpd = csfFindOptimalPoint(cpdPeak, cpdCut, csPeak, csfState.adaptiveBeta);
+        testDenom = csfCpdToDenom(optCpd);
+        // Avoid re-testing denoms we already have
+        const tested = Object.keys(csfState.results).map(Number);
+        if (tested.includes(testDenom)) {
+            // Shift to next-closest untested candidate
+            const candidates = [100, 90, 80, 70, 60, 50, 45, 40, 35, 30, 25, 20, 15, 12, 10]
+                .filter(d => !tested.includes(d));
+            const optLogCpd = Math.log10(600 / testDenom);
+            let best = candidates[0], bestDist = Infinity;
+            for (const d of candidates) {
+                const dist = Math.abs(Math.log10(600 / d) - optLogCpd);
+                if (dist < bestDist) { bestDist = dist; best = d; }
+            }
+            testDenom = best;
+        }
+        const predictedCS = csfModelPredict(600 / testDenom, cpdPeak, cpdCut, csPeak, csfState.adaptiveBeta);
+        predictedThreshold = 100 / Math.max(1.01, predictedCS);
+        numPairs = CSF_ADAPTIVE_CONFIRM_PAIRS;
+        stepLabel = 'Confirm';
+    } else {
+        // VALIDATION RETEST: re-test the suspect point
+        testDenom = csfState.adaptiveDenom; // set by the validation checker
+        const predictedCS = csfState.adaptiveBeta
+            ? csfModelPredict(600 / testDenom, cpdPeak, cpdCut, csPeak, csfState.adaptiveBeta)
+            : Math.sqrt(csPeak);
+        predictedThreshold = 100 / Math.max(1.01, predictedCS);
+        numPairs = CSF_ADAPTIVE_RETEST_PAIRS;
+        stepLabel = 'Retest';
+    }
+
+    csfState.adaptiveDenom = testDenom;
+
+    // Build paired contrasts centered around predicted threshold
+    const startContrast = Math.min(100, predictedThreshold * 3.0);
+    const endContrast = Math.max(CSF_MIN_CONTRAST, predictedThreshold * 0.15);
+    csfState.currentContrasts = csfComputePairedContrasts(startContrast, endContrast, numPairs);
+    csfState.currentLetters = csfPickLetters(numPairs * 2);
+    csfState.waitingForClinician = true;
+
+    renderDistanceTest();
+
+    const indicator = $('#snellen-indicator');
+    if (indicator) {
+        indicator.textContent = `Adaptive ${stepLabel} — 20/${testDenom}`;
+        indicator.style.background = 'linear-gradient(135deg, #3b82f6, #1d4ed8)';
+    }
+
+    csfBroadcast('csf-line', {
+        snellenDenom: testDenom,
+        letters: csfState.currentLetters,
+        contrasts: csfState.currentContrasts,
+        pass: csfState.adaptiveStep + 1,
+        levelIndex: csfState.adaptiveStep,
+        totalLevels: 3,
+        adaptivePhase: true,
+        adaptiveStep: csfState.adaptiveStep
+    });
+}
+
+// After adaptive testing, validate the curve fit. Returns denom to retest, or null if clean.
+function csfAdaptiveValidate() {
+    const cpdPeak = 600 / CSF_PEAK_ANCHOR_DENOM;
+    const cpdCut = csfAdaptiveCutoffCpd();
+    const csPeak = csfAdaptivePeakCS();
+    const beta = csfState.adaptiveBeta;
+    if (!beta) return null;
+
+    // Check each tested denom against the model prediction
+    let worstDenom = null, worstResidual = 0;
+    const tested = Object.keys(csfState.results).map(Number);
+    for (const denom of tested) {
+        const r = csfState.results[denom];
+        const threshold = r.refinedThreshold || r.coarseThreshold;
+        if (!threshold || r.allWrong) continue;
+        const measuredCS = 100 / threshold;
+        const cpd = 600 / denom;
+        const predictedCS = csfModelPredict(cpd, cpdPeak, cpdCut, csPeak, beta);
+        const residual = Math.abs(Math.log10(Math.max(1, measuredCS)) - Math.log10(Math.max(1, predictedCS)));
+        // 0.3 log units ≈ 2× divergence — likely a guess or attention lapse
+        if (residual > 0.3 && residual > worstResidual) {
+            worstResidual = residual;
+            worstDenom = denom;
+        }
+    }
+    return worstDenom;
+}
+
+// Re-fit β using all measured data points (least-squares in log-CS space)
+function csfRefitBeta() {
+    const cpdPeak = 600 / CSF_PEAK_ANCHOR_DENOM;
+    const cpdCut = csfAdaptiveCutoffCpd();
+    const csPeak = csfAdaptivePeakCS();
+    const logCsPeak = Math.log10(Math.max(1.01, csPeak));
+
+    // Collect all measured points (excluding peak anchor itself and allWrong)
+    const points = [];
+    for (const [denomStr, r] of Object.entries(csfState.results)) {
+        const denom = Number(denomStr);
+        if (denom === CSF_PEAK_ANCHOR_DENOM) continue; // skip peak (it defines the anchor)
+        const threshold = r.refinedThreshold || r.coarseThreshold;
+        if (!threshold || r.allWrong) continue;
+        const cpd = 600 / denom;
+        if (cpd <= cpdPeak || cpd >= cpdCut) continue;
+        const logCs = Math.log10(100 / threshold);
+        const t = (Math.log10(cpd) - Math.log10(cpdPeak)) / (Math.log10(cpdCut) - Math.log10(cpdPeak));
+        if (t > 0 && t < 1) points.push({ t, logCs });
+    }
+    if (points.length === 0) return csfState.adaptiveBeta || 2.0;
+
+    // Grid search for β that minimizes sum of squared residuals
+    let bestBeta = 2.0, bestErr = Infinity;
+    for (let b = 0.3; b <= 5.0; b += 0.05) {
+        let err = 0;
+        for (const p of points) {
+            const predicted = logCsPeak * (1 - Math.pow(p.t, b));
+            err += (p.logCs - predicted) ** 2;
+        }
+        if (err < bestErr) { bestErr = err; bestBeta = b; }
+    }
+    return bestBeta;
+}
+
 function csfNextLine() {
     const denom = csfState.levels[csfState.levelIndex];
     const startContrast = csfAdaptiveStart(csfState.levelIndex);
@@ -2565,7 +2805,7 @@ function csfProcessResponse(errors) {
         const allWrong = errors.every(e => e === 1);
         csfState.waitingForClinician = false;
 
-        // Store as coarse result for 20/100 — pass 1 will skip this level
+        // Store as coarse result for 20/100
         csfState.results[denom] = {
             coarseThreshold: threshold,
             allWrong,
@@ -2574,19 +2814,73 @@ function csfProcessResponse(errors) {
             letters: [...csfState.currentLetters]
         };
 
-        // Done — transition to pass 1
+        // Transition to adaptive phase — Bayesian 2-point curve fitting
         csfState.peakAnchorPhase = false;
-        csfState.pass = 1;
-        const acuityLimitDenom = csfState.acuityFail || 0;
-        csfState.levels = CSF_ALL_LEVELS.filter(d => d > acuityLimitDenom);
-        // Skip 20/100 in pass 1 — we already have reliable data from the peak anchor
-        csfState.levels = csfState.levels.filter(d => d !== CSF_PEAK_ANCHOR_DENOM);
-        if (csfState.acuityAnchor && csfState.levels.includes(csfState.acuityAnchor)) {
-            // Keep it — the sweep will test contrast threshold at this size
+        csfState.adaptivePhase = true;
+        csfState.adaptiveStep = 0;
+        csfState.adaptiveRetests = 0;
+        csfAdaptiveNextLine();
+        return;
+    }
+
+    // --- Adaptive phase: Bayesian curve fitting with paired letters ---
+    if (csfState.adaptivePhase) {
+        const denom = csfState.adaptiveDenom;
+        const threshold = csfEstimateThresholdPaired(csfState.currentContrasts, errors);
+        const allWrong = errors.every(e => e === 1);
+        csfState.waitingForClinician = false;
+
+        // Store with both coarse and refined (paired quality from the start)
+        if (!csfState.results[denom]) csfState.results[denom] = {};
+        csfState.results[denom].coarseThreshold = threshold;
+        csfState.results[denom].refinedThreshold = threshold;
+        csfState.results[denom].allWrong = allWrong;
+        csfState.results[denom].errors = [...errors];
+        csfState.results[denom].contrasts = [...csfState.currentContrasts];
+        csfState.results[denom].letters = [...csfState.currentLetters];
+        csfState.results[denom].refinedErrors = [...errors];
+        csfState.results[denom].refinedContrasts = [...csfState.currentContrasts];
+        csfState.results[denom].refinedLetters = [...csfState.currentLetters];
+
+        if (csfState.adaptiveStep === 0) {
+            // Knee done — fit β from this measurement
+            const cpdPeak = 600 / CSF_PEAK_ANCHOR_DENOM;
+            const cpdCut = csfAdaptiveCutoffCpd();
+            const csPeak = csfAdaptivePeakCS();
+            const measuredCS = allWrong ? 1.0 : 100 / threshold;
+            csfState.adaptiveBeta = csfFitBeta(cpdPeak, cpdCut, csPeak, 600 / denom, measuredCS);
+            csfState.adaptiveStep = 1;
+            csfAdaptiveNextLine();
+        } else if (csfState.adaptiveStep === 1) {
+            // Confirmation done — re-fit β with both points, then validate
+            csfState.adaptiveBeta = csfRefitBeta();
+            const suspect = csfAdaptiveValidate();
+            if (suspect && csfState.adaptiveRetests < CSF_ADAPTIVE_MAX_RETESTS) {
+                // Retest the worst outlier
+                csfState.adaptiveStep = 2;
+                csfState.adaptiveRetests++;
+                csfState.adaptiveDenom = suspect;
+                csfAdaptiveNextLine();
+            } else {
+                // Clean or retests exhausted — finalize
+                csfState.adaptivePhase = false;
+                csfState.pass = 2; // so completion logic works
+                csfComplete();
+            }
+        } else {
+            // Validation retest done — re-fit and check again
+            csfState.adaptiveBeta = csfRefitBeta();
+            const suspect = csfAdaptiveValidate();
+            if (suspect && csfState.adaptiveRetests < CSF_ADAPTIVE_MAX_RETESTS) {
+                csfState.adaptiveRetests++;
+                csfState.adaptiveDenom = suspect;
+                csfAdaptiveNextLine();
+            } else {
+                csfState.adaptivePhase = false;
+                csfState.pass = 2;
+                csfComplete();
+            }
         }
-        csfState.levelIndex = 0;
-        csfState.consecutiveFloors = 0;
-        csfNextLine();
         return;
     }
 
@@ -2939,6 +3233,16 @@ function csfHandleClinicianMessage(data) {
             break;
         case 'csf-abort':
             csfStopTest();
+            break;
+        case 'csf-retest':
+            // Clinician wants to retest same patient — clear test state, show targets
+            resetTestState();
+            renderDistanceTest();
+            break;
+        case 'csf-new-patient':
+            // Clinician wants a new patient — clear everything, go to input
+            resetTestState();
+            showScreen('input');
             break;
         case 'clinician-ready':
             // Clinician loaded; if we have a pending line, resend
