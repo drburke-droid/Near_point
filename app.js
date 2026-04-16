@@ -2811,7 +2811,8 @@ function csfProcessResponse(errors) {
             allWrong,
             errors: [...errors],
             contrasts: [...csfState.currentContrasts],
-            letters: [...csfState.currentLetters]
+            letters: [...csfState.currentLetters],
+            phase: 'peakAnchor'
         };
 
         // Transition to adaptive phase — Bayesian 2-point curve fitting
@@ -2841,6 +2842,13 @@ function csfProcessResponse(errors) {
         csfState.results[denom].refinedErrors = [...errors];
         csfState.results[denom].refinedContrasts = [...csfState.currentContrasts];
         csfState.results[denom].refinedLetters = [...csfState.currentLetters];
+        // First-time tag: anchor role for the 4-point ground-truth curve.
+        // Retests preserve the original role so the curve still has its anchor.
+        if (!csfState.results[denom].phase) {
+            csfState.results[denom].phase = csfState.adaptiveStep === 0
+                ? 'shoulderMid'
+                : csfState.adaptiveStep === 1 ? 'descendingMid' : 'retest';
+        }
 
         if (csfState.adaptiveStep === 0) {
             // Knee done — fit β from this measurement
@@ -2965,7 +2973,7 @@ function csfBuildResults() {
         const letterData = r.refinedLetters
             ? { letters: r.refinedLetters, errors: r.refinedErrors, contrasts: r.refinedContrasts }
             : (r.letters ? { letters: r.letters, errors: r.errors, contrasts: r.contrasts } : null);
-        return { denom, cpd, threshold, sensitivity, letterData };
+        return { denom, cpd, threshold, sensitivity, letterData, phase: r.phase || null };
     });
     // Attach acuity anchor: reliable 100%-contrast acuity limit from end of pass 1
     built.acuityAnchor = csfState.acuityAnchor;
@@ -3374,33 +3382,64 @@ function csfNormative(cpd) {
     return pts[pts.length - 1].cs;
 }
 
-// Catmull-Rom spline: returns array of {x, y} points for smooth curve through data
-function catmullRomSpline(points, segments) {
-    if (points.length < 2) return points;
-    const result = [];
-    // Pad endpoints by reflecting
-    const pts = [
-        { x: 2 * points[0].x - points[1].x, y: 2 * points[0].y - points[1].y },
-        ...points,
-        { x: 2 * points[points.length - 1].x - points[points.length - 2].x,
-          y: 2 * points[points.length - 1].y - points[points.length - 2].y }
-    ];
-    for (let i = 1; i < pts.length - 2; i++) {
-        const p0 = pts[i - 1], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2];
-        for (let s = 0; s < segments; s++) {
+// Monotone cubic Hermite (Fritsch–Carlson PCHIP) — no overshoot between knots.
+// Points must be sorted by x. Returns a sampled curve that passes exactly through
+// every input point. At local extrema, the slope is clamped to 0 so the curve
+// cannot bulge past an anchor. Operates in pixel space (already log-log).
+function pchipSpline(points, segments) {
+    const n = points.length;
+    if (n < 2) return points.slice();
+    if (n === 2) {
+        const out = [];
+        for (let s = 0; s <= segments; s++) {
+            const t = s / segments;
+            out.push({
+                x: points[0].x + t * (points[1].x - points[0].x),
+                y: points[0].y + t * (points[1].y - points[0].y)
+            });
+        }
+        return out;
+    }
+    const h = new Array(n - 1), d = new Array(n - 1);
+    for (let i = 0; i < n - 1; i++) {
+        h[i] = points[i + 1].x - points[i].x;
+        d[i] = h[i] === 0 ? 0 : (points[i + 1].y - points[i].y) / h[i];
+    }
+    const m = new Array(n);
+    for (let i = 1; i < n - 1; i++) {
+        if (d[i - 1] * d[i] <= 0) { m[i] = 0; continue; }
+        const w1 = 2 * h[i] + h[i - 1];
+        const w2 = h[i] + 2 * h[i - 1];
+        m[i] = (w1 + w2) / (w1 / d[i - 1] + w2 / d[i]);
+    }
+    const endSlope = (h0, h1, d0, d1) => {
+        const s = ((2 * h0 + h1) * d0 - h0 * d1) / (h0 + h1);
+        if (s * d0 <= 0) return 0;
+        if (d0 * d1 <= 0 && Math.abs(s) > 3 * Math.abs(d0)) return 3 * d0;
+        return s;
+    };
+    m[0] = endSlope(h[0], h[1] || h[0], d[0], d[1] !== undefined ? d[1] : d[0]);
+    m[n - 1] = endSlope(h[n - 2], h[n - 3] !== undefined ? h[n - 3] : h[n - 2],
+                        d[n - 2], d[n - 3] !== undefined ? d[n - 3] : d[n - 2]);
+    const out = [];
+    for (let i = 0; i < n - 1; i++) {
+        const hi = h[i], x0 = points[i].x, y0 = points[i].y, y1 = points[i + 1].y;
+        const m0 = m[i], m1 = m[i + 1];
+        const startS = i === 0 ? 0 : 1;
+        for (let s = startS; s <= segments; s++) {
             const t = s / segments;
             const t2 = t * t, t3 = t2 * t;
-            const x = 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * t +
-                (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
-                (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3);
-            const y = 0.5 * ((2 * p1.y) + (-p0.y + p2.y) * t +
-                (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
-                (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3);
-            result.push({ x, y });
+            const h00 = 2 * t3 - 3 * t2 + 1;
+            const h10 = t3 - 2 * t2 + t;
+            const h01 = -2 * t3 + 3 * t2;
+            const h11 = t3 - t2;
+            out.push({
+                x: x0 + t * hi,
+                y: h00 * y0 + h10 * hi * m0 + h01 * y1 + h11 * hi * m1
+            });
         }
     }
-    result.push(points[points.length - 1]);
-    return result;
+    return out;
 }
 
 // Data-driven CSF reference scenarios (letter-CSF domain).
@@ -3784,95 +3823,61 @@ function renderCSFGraph(canvas, results) {
     });
 
     // --- Patient spline ---
-    // Build clean curve: include results up to peak, then decline until first
-    // "can't see" — anything visible beyond a "can't see" gap is a lucky guess.
-    // Also enforce monotonic decline past the peak.
+    // Patient curve is built from up to 4 ground-truth anchors:
+    //   peakAnchor (Y-axis)  — peak sensitivity contrast sweep at 20/100
+    //   shoulderMid          — adaptive knee sweep
+    //   descendingMid        — adaptive confirm sweep
+    //   crossover (X-axis)   — CS=1 derived from acuity anchor/fail
+    // The spline passes exactly through each; PCHIP guarantees no overshoot.
     const allSorted = [...results].sort((a, b) => a.cpd - b.cpd);
-    let peakIdx = 0;
-    for (let i = 1; i < allSorted.length; i++) {
-        if (allSorted[i].sensitivity > allSorted[peakIdx].sensitivity) peakIdx = i;
-    }
-    const plotResults = [];
-    // Include everything up to the peak (skip any "can't see" in the plateau region)
-    for (let i = 0; i <= peakIdx; i++) {
-        if (allSorted[i].threshold < 100) plotResults.push(allSorted[i]);
-    }
-    // Past peak: include declining results, stop at first "can't see"
-    for (let i = peakIdx + 1; i < allSorted.length; i++) {
-        if (allSorted[i].threshold >= 100) break;
-        plotResults.push(allSorted[i]);
-    }
-    // Enforce monotonic decline past the peak
-    if (plotResults.length >= 3) {
-        let pIdx = 0;
-        for (let i = 1; i < plotResults.length; i++) {
-            if (plotResults[i].sensitivity > plotResults[pIdx].sensitivity) pIdx = i;
-        }
-        for (let i = pIdx + 1; i < plotResults.length; i++) {
-            if (plotResults[i].sensitivity > plotResults[i - 1].sensitivity) {
-                const prev = plotResults[i - 1];
-                const next = (i + 1 < plotResults.length) ? plotResults[i + 1] : null;
-                if (next && next.sensitivity < prev.sensitivity) {
-                    const lc = Math.log10(plotResults[i].cpd);
-                    const lc1 = Math.log10(prev.cpd), lc2 = Math.log10(next.cpd);
-                    const ls1 = Math.log10(prev.sensitivity), ls2 = Math.log10(next.sensitivity);
-                    const t = (lc - lc1) / (lc2 - lc1);
-                    plotResults[i] = { ...plotResults[i], sensitivity: Math.pow(10, ls1 + t * (ls2 - ls1)) };
-                } else {
-                    plotResults[i] = { ...plotResults[i], sensitivity: prev.sensitivity };
-                }
-            }
-        }
-    }
-    const patientPts = plotResults.map(r => ({ x: toX(r.cpd), y: toY(r.sensitivity) }));
+    const plotResults = allSorted.filter(r => r.threshold < 100);
 
-    // Acuity anchor determines where the curve crosses CS=1. Period.
-    // This was established by a reliable 100%-contrast test (6 letters, ≥3 correct)
-    // before any contrast sweep began.
     const acuityAnchor = results.acuityAnchor || null;
     const acuityFail = results.acuityFail || null;
     let crossoverCpd = null;
-
     if (acuityAnchor && acuityFail) {
-        // Crossover is midpoint (log-space) between last pass and first fail
-        const anchorCpd = 600 / acuityAnchor;
-        const failCpd = 600 / acuityFail;
-        crossoverCpd = Math.pow(10, (Math.log10(anchorCpd) + Math.log10(failCpd)) / 2);
+        crossoverCpd = Math.pow(10, (Math.log10(600/acuityAnchor) + Math.log10(600/acuityFail)) / 2);
     } else if (acuityAnchor && !acuityFail) {
-        // All acuity levels passed — mark at the last passing size
         crossoverCpd = 600 / acuityAnchor;
-    } else {
-        // No acuity anchor (legacy data) — extrapolate from last two points
-        if (plotResults.length >= 2) {
-            const last = plotResults[plotResults.length - 1];
-            const prev = plotResults[plotResults.length - 2];
-            if (last.sensitivity > 1.0) {
-                const logCpd1 = Math.log10(prev.cpd), logCpd2 = Math.log10(last.cpd);
-                const logCs1 = Math.log10(prev.sensitivity), logCs2 = Math.log10(last.sensitivity);
-                const slope = (logCs2 - logCs1) / (logCpd2 - logCpd1);
-                if (slope < 0) crossoverCpd = Math.pow(10, logCpd2 + (0 - logCs2) / slope);
-            }
+    } else if (plotResults.length >= 2) {
+        const last = plotResults[plotResults.length - 1];
+        const prev = plotResults[plotResults.length - 2];
+        if (last.sensitivity > 1.0) {
+            const lc1 = Math.log10(prev.cpd), lc2 = Math.log10(last.cpd);
+            const ls1 = Math.log10(prev.sensitivity), ls2 = Math.log10(last.sensitivity);
+            const slope = (ls2 - ls1) / (lc2 - lc1);
+            if (slope < 0) crossoverCpd = Math.pow(10, lc2 + (0 - ls2) / slope);
         }
     }
 
-    // Force the curve to pass through CS=1 at the crossover point
+    // Pick anchor points by phase tag (new 4-point protocol).
+    // If phase tags are missing (legacy result), fall back to using all measured points.
+    const byPhase = {};
+    for (const r of plotResults) {
+        if (r.phase && !byPhase[r.phase]) byPhase[r.phase] = r;
+    }
+    const anchorResults = [byPhase.peakAnchor, byPhase.shoulderMid, byPhase.descendingMid].filter(Boolean);
+    const useAnchors = anchorResults.length >= 2;
+    const ctrlData = useAnchors ? anchorResults.sort((a, b) => a.cpd - b.cpd) : plotResults;
+    const patientPts = ctrlData.map(r => ({ x: toX(r.cpd), y: toY(r.sensitivity) }));
+
     if (crossoverCpd) {
-        // Remove any plot points past the crossover (they'd be beyond acuity limit)
         const crossX = toX(crossoverCpd);
         while (patientPts.length > 0 && patientPts[patientPts.length - 1].x > crossX + 1) {
             patientPts.pop();
         }
         patientPts.push({ x: crossX, y: toY(1.0) });
     }
+    const spline = patientPts.length >= 2 ? pchipSpline(patientPts, 24) : [];
 
-    if (patientPts.length >= 2) {
-        const dx = patientPts[1].x - patientPts[0].x;
-        const dy = patientPts[1].y - patientPts[0].y;
-        const extSteps = (patientPts[0].x - ml) / (dx || 1);
-        const extY = patientPts[0].y - dy * extSteps;
-        patientPts.unshift({ x: ml, y: Math.max(mt, Math.min(mt + ph, extY)) });
+    // Cosmetic left-edge extension to the Y-axis. Uses the slope between the
+    // first two anchors, clamped so a descending curve can't rise above the peak.
+    if (spline.length >= 2 && patientPts.length >= 2 && spline[0].x > ml + 0.5) {
+        const p0 = patientPts[0], p1 = patientPts[1];
+        const slope = Math.min(0, (p1.y - p0.y) / ((p1.x - p0.x) || 1));
+        const extY = p0.y + (ml - p0.x) * slope;
+        spline.unshift({ x: ml, y: Math.max(mt, Math.min(mt + ph, extY)) });
     }
-    const spline = catmullRomSpline(patientPts, 24);
 
     // --- Green/red fill between patient and normative ---
     // Extend patient curve conceptually: past acuity limit, patient is at CS=1 (bottom)
@@ -4067,7 +4072,11 @@ function renderCSFGraph(canvas, results) {
         const otherLabel = otherMode === 'mesopic' ? 'Mesopic' : 'Photopic';
         const otherSorted = [...otherResults].filter(r => r.threshold < 100).sort((a, b) => a.cpd - b.cpd);
         if (otherSorted.length >= 2) {
-            const otherPts = otherSorted.map(r => ({ x: toX(r.cpd), y: toY(r.sensitivity) }));
+            const oByPhase = {};
+            for (const r of otherSorted) { if (r.phase && !oByPhase[r.phase]) oByPhase[r.phase] = r; }
+            const oAnchors = [oByPhase.peakAnchor, oByPhase.shoulderMid, oByPhase.descendingMid].filter(Boolean);
+            const oCtrl = oAnchors.length >= 2 ? oAnchors.sort((a, b) => a.cpd - b.cpd) : otherSorted;
+            const otherPts = oCtrl.map(r => ({ x: toX(r.cpd), y: toY(r.sensitivity) }));
             // Add crossover point if anchor exists
             const oAnchor = otherResults.acuityAnchor, oFail = otherResults.acuityFail;
             if (oAnchor && oFail) {
@@ -4077,7 +4086,13 @@ function renderCSFGraph(canvas, results) {
                 otherPts.push({ x: cx, y: toY(1.0) });
             }
             if (otherPts.length >= 2) {
-                const oSpline = catmullRomSpline(otherPts, 24);
+                const oSpline = pchipSpline(otherPts, 24);
+                if (oSpline.length >= 2 && oSpline[0].x > ml + 0.5) {
+                    const a0 = otherPts[0], a1 = otherPts[1];
+                    const sl = Math.min(0, (a1.y - a0.y) / ((a1.x - a0.x) || 1));
+                    const eY = a0.y + (ml - a0.x) * sl;
+                    oSpline.unshift({ x: ml, y: Math.max(mt, Math.min(mt + ph, eY)) });
+                }
                 ctx.strokeStyle = otherColor;
                 ctx.lineWidth = 3;
                 ctx.setLineDash([10, 6]);
